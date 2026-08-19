@@ -1,0 +1,2119 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Theuščina pirátská hra</title>
+<style>
+  :root { --parchment: #FFF3D6; --ink: #2A1840; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: #23303c; color: var(--parchment);
+    font-family: "Verdana", "DejaVu Sans", system-ui, sans-serif;
+  }
+
+  /* ================= herní obrazovka =================
+     Celá hra se musí vejít na jednu obrazovku – nikdy se neroluje.
+     Na šířku: plocha vlevo, ovládání ve sloupci vpravo.
+     Na výšku (tablet): plocha nahoře, ovládání pod ní.            */
+  html, body { height: 100%; overflow: hidden; }
+  #hra {
+    height: 100vh; height: 100dvh;
+    display: grid; gap: 10px; padding: 10px;
+    grid-template-columns: minmax(0, 1fr) clamp(340px, 29vw, 470px);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "plocha ovladani";
+  }
+  #plocha { grid-area: plocha; min-width: 0; min-height: 0; display: flex; }
+  #plocha svg { width: 100%; height: 100%; display: block; border-radius: 12px; }
+
+  h1 { margin: 0; font-size: clamp(14px, 1.4vw, 21px); text-align: center; text-shadow: 0 2px 0 #000a; }
+
+  #ovladani {
+    grid-area: ovladani; min-height: 0; overflow-y: auto;
+    background: linear-gradient(#7B5230, #5E3D22);
+    border: 4px solid #3A2412; border-radius: 14px; padding: 10px;
+    display: flex; flex-direction: column; gap: 8px; align-items: center;
+  }
+  /* nic ve sloupci se nesmí smrsknout pod svůj obsah, jinak se to překrývá */
+  #ovladani > * { flex-shrink: 0; }
+
+  @media (max-width: 900px), (orientation: portrait) {
+    #hra {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) auto;
+      grid-template-areas: "plocha" "ovladani";
+    }
+    #ovladani { max-height: 56dvh; }
+  }
+  #vyzva { font-size: clamp(15px, 1.7vw, 22px); font-weight: bold; text-align: center; min-height: 1.4em; }
+  #vyzva .kdo { padding: 2px 10px; border-radius: 8px; color: #fff; text-shadow: 0 1px 2px #0008; }
+
+  /* Kdo je na tahu: jeho kartička je pořád vidět, ať každý ví, za koho hraje. */
+  #kdo-hraje {
+    display: flex; align-items: center; gap: 12px; width: 100%; max-width: 420px;
+    justify-content: center;
+  }
+  #pirat-karta {
+    width: clamp(58px, 7vw, 86px); aspect-ratio: 1054 / 1492; object-fit: cover;
+    border-radius: 8px; border: 3px solid #7B5230; box-shadow: 0 3px 8px #0006;
+    flex-shrink: 0; background: #5E3D22;
+  }
+  #kdo-hraje #vyzva { text-align: left; }
+
+  /* Utíkáme, nebo bojujeme? Obě půlky tahu musí být na obrazovce vidět
+     vedle sebe, jinak si hráč nevšimne, že vůbec o něčem rozhoduje. */
+  .volba {
+    display: flex; align-items: baseline; justify-content: center; gap: 8px;
+    width: 100%; max-width: 420px; color: #FFF3D6;
+    border-top: 2px solid #ffffff2e; padding-top: 6px; margin-top: 2px;
+  }
+  .volba span { font-weight: bold; font-size: clamp(13px, 1.5vw, 17px); text-shadow: 0 2px 0 #0008; }
+  .volba small { font-size: clamp(10px, 1.1vw, 13px); opacity: .75; }
+  .volba.spi { opacity: .35; }
+
+  #kostky { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; width: 100%; max-width: 420px; }
+  .kostka {
+    aspect-ratio: 1/1; background: #FFF9EC; border: 4px solid #3A2412; border-radius: 16px;
+    cursor: pointer; padding: 8%; box-shadow: 0 5px 0 #3A2412; touch-action: manipulation;
+    transition: transform .1s, box-shadow .1s, filter .15s;
+  }
+  .kostka:hover:not(:disabled) { transform: translateY(-3px); box-shadow: 0 8px 0 #3A2412; }
+  .kostka:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 2px 0 #3A2412; }
+  .kostka:disabled { filter: grayscale(1) brightness(.7); cursor: default; }
+  .kostka circle { fill: var(--ink); }
+
+  button.akce {
+    font: inherit; font-weight: bold; font-size: 15px; padding: 8px 16px; border-radius: 10px;
+    border: 3px solid #3A2412; background: #C9A227; color: #2A1840; cursor: pointer;
+    box-shadow: 0 4px 0 #3A2412;
+  }
+  button.akce:active { transform: translateY(3px); box-shadow: 0 1px 0 #3A2412; }
+
+  .figurka { transition: transform .22s cubic-bezier(.34,1.3,.64,1); }
+  .figurka .chapadlo { display: none; }
+  .figurka.chycen .chapadlo { display: block; animation: sevreni 1.1s ease-in-out infinite; }
+  @keyframes sevreni { 0%,100% { opacity: .85 } 50% { opacity: 1 } }
+
+  /* houpání na vlnách */
+  .houpani { animation: houpani 2.8s ease-in-out infinite; }
+  @keyframes houpani {
+    0%, 100% { transform: translateY(0) rotate(-1.6deg); }
+    50%      { transform: translateY(-2.5px) rotate(1.6deg); }
+  }
+  /* došlápnutí na políčko */
+  .skokvrstva.skok { animation: poskok .24s ease-out; }
+  @keyframes poskok {
+    0%   { transform: translateY(0) scaleY(1); }
+    35%  { transform: translateY(-11px) scaleY(1.06); }
+    75%  { transform: translateY(0) scaleY(.94); }
+    100% { transform: translateY(0) scaleY(1); }
+  }
+
+  /* otřes plochy, když sevře kraken */
+  #plocha.tresk { animation: tresk .5s ease-in-out; }
+  @keyframes tresk {
+    0%, 100% { transform: translate(0, 0) }
+    15% { transform: translate(-7px, 3px) }
+    30% { transform: translate(6px, -4px) }
+    45% { transform: translate(-5px, -2px) }
+    60% { transform: translate(4px, 3px) }
+    80% { transform: translate(-2px, -1px) }
+  }
+
+  /* zlatý záblesk na truhle */
+  #truhla.zablesk { animation: zablesk .9s ease-out; }
+  @keyframes zablesk {
+    0%   { filter: brightness(1); }
+    30%  { filter: brightness(2.2) drop-shadow(0 0 18px #FFE9A0); }
+    100% { filter: brightness(1); }
+  }
+
+  #zvukTlacitko { font-size: 19px; padding: 8px 14px; }
+  /* Sek mečem: bílý šleh přes plochu. */
+  .sek { animation: sekAnim .38s ease-out forwards; }
+  @keyframes sekAnim {
+    0%   { opacity: 0; transform: scale(.2) rotate(-18deg); }
+    35%  { opacity: 1; transform: scale(1) rotate(0deg); }
+    100% { opacity: 0; transform: scale(1.25) rotate(6deg); }
+  }
+  /* Výbuch sudu: rozpínající se koule ohně. */
+  .bum { animation: bumAnim .5s ease-out forwards; }
+  @keyframes bumAnim {
+    0%   { opacity: 1; transform: scale(.15); }
+    60%  { opacity: 1; transform: scale(1); }
+    100% { opacity: 0; transform: scale(1.4); }
+  }
+
+  /* Terče při míření pistolí – klikne se přímo na mapu. */
+  .terc { cursor: pointer; }
+  .terc circle { animation: terckaTepe 1s ease-in-out infinite; }
+  @keyframes terckaTepe {
+    0%, 100% { r: 34; opacity: .95 }
+    50%      { r: 42; opacity: .55 }
+  }
+  .sud-na-poli { animation: sudCeka 1.4s ease-in-out infinite; transform-box: fill-box;
+                 transform-origin: center; }
+  @keyframes sudCeka { 0%, 100% { opacity: 1 } 50% { opacity: .72 } }
+  #kraken.zasah { animation: zasah .5s ease-out; }
+  @keyframes zasah {
+    0%, 100% { filter: none; }
+    20%      { filter: brightness(1.9) saturate(3) hue-rotate(-40deg); }
+    60%      { filter: brightness(1.6) saturate(2.4) hue-rotate(-30deg); }
+  }
+  #kraken-karta { background: #06111ccc; }
+  #vlna {
+    position: fixed; left: 50%; top: 58%; width: 20px; height: 20px; border-radius: 50%;
+    background: radial-gradient(circle, #dff6ff 0%, #7fd4ee 40%, #7fd4ee00 70%);
+    transform: translate(-50%, -50%); animation: rozstrik 1.1s ease-out forwards;
+  }
+  @keyframes rozstrik {
+    0%   { width: 20px; height: 20px; opacity: .95; }
+    100% { width: 210vmax; height: 210vmax; opacity: 0; }
+  }
+  #kraken-splash { text-align: center; animation: vynoreni .7s cubic-bezier(.2,1.5,.4,1) both; }
+  #kraken-splash p {
+    color: #FFF3D6; font-size: clamp(15px, 2vw, 24px); font-weight: bold;
+    margin-top: 14px; text-shadow: 0 2px 6px #000;
+  }
+  @keyframes vynoreni {
+    0%   { transform: scale(.2) rotate(-8deg); opacity: 0; }
+    70%  { transform: scale(1.06) rotate(2deg); opacity: 1; }
+    100% { transform: scale(1) rotate(0); opacity: 1; }
+  }
+  /* Všechny velké kartičky mají jednu velikost – kraken, salva i konec hry.
+     Předlohy jsou zhruba 1054 × 1492 px. */
+  .karta-obrazek {
+    width: clamp(209px, 30vh, 352px); aspect-ratio: 1054 / 1492; object-fit: cover;
+    border-radius: 12px; border: 5px solid #7B5230; display: block;
+    margin: 0 auto; box-shadow: 0 6px 16px #0007;
+  }
+  #kraken-obrazek {
+    /* předloha je hodně tmavá – prosvětlíme ji a stočíme do fialova */
+    filter: brightness(1.45) saturate(1.3) hue-rotate(-8deg) contrast(0.94);
+    margin-bottom: 14px;
+  }
+  /* karta SALVA – plácne na stůl, když pirát stoupne na červené pole */
+  #salva-karta { background: #1b0a06cc; }
+  #salva-obrazek { animation: placnuti .45s cubic-bezier(.2,1.6,.4,1) both; }
+  @keyframes placnuti {
+    0%   { transform: scale(2.1) rotate(-13deg); opacity: 0; }
+    60%  { transform: scale(.94) rotate(3deg);  opacity: 1; }
+    100% { transform: scale(1) rotate(0);       opacity: 1; }
+  }
+
+  #aktivni-krouzek { transition: transform .22s cubic-bezier(.34,1.3,.64,1); }
+  #aktivni-krouzek circle { animation: tep 1.2s ease-in-out infinite; }
+  @keyframes tep { 0%,100% { r: 31; opacity: .95 } 50% { r: 37; opacity: .45 } }
+
+  #pocitadlo {
+    font-size: 64px; font-weight: bold; fill: #FFF3D6; stroke: #2A1840; stroke-width: 8;
+    paint-order: stroke; text-anchor: middle; opacity: 0; pointer-events: none;
+  }
+  #pocitadlo.bliknuti { animation: blik .28s ease-out; }
+  @keyframes blik {
+    0%   { opacity: 0; transform: translateY(6px) scale(.6); }
+    40%  { opacity: 1; transform: translateY(-6px) scale(1.15); }
+    100% { opacity: 0; transform: translateY(-22px) scale(1); }
+  }
+
+  /* ================= překryvné obrazovky ================= */
+  .prekryv {
+    position: fixed; inset: 0; z-index: 20; display: none;
+    align-items: center; justify-content: center; padding: 16px; overflow: auto;
+    background: radial-gradient(circle at 50% 30%, #2b5f74, #14212c 70%);
+  }
+  .prekryv.videt { display: flex; }
+  .panel {
+    background: linear-gradient(#F7E7BE, #E9CF95); color: #4A2E10;
+    border: 8px solid #7B5230; border-radius: 22px; padding: 22px 26px;
+    text-align: center; max-width: min(1500px, 97vw);
+  }
+  /* Konec hry: kartička vedle textu, ať se obojí vejde bez rolování. */
+  .panel.konec { display: flex; gap: 24px; align-items: center; text-align: left; }
+  .panel.konec .konec-text { max-width: 44ch; }
+  @media (max-width: 820px), (orientation: portrait) {
+    .panel.konec { flex-direction: column; gap: 14px; text-align: center; }
+    .panel.konec .karta-obrazek { width: clamp(150px, 24vh, 260px); }
+  }
+  .panel h2 { margin: 0 0 4px; font-size: clamp(22px, 3.4vw, 40px); }
+  .panel p  { margin: 0 0 16px; font-size: clamp(14px, 1.6vw, 19px); }
+
+  #kdo-volby { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 18px; }
+  .kdo-volba {
+    width: clamp(145px, 20vw, 210px); font: inherit; font-weight: bold;
+    font-size: clamp(17px, 2.2vw, 26px); padding: 16px 10px;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    background: #C9A227; color: #2A1840; border: 5px solid #7B5230; border-radius: 20px;
+    cursor: pointer; box-shadow: 0 6px 0 #7B5230; transition: transform .12s, filter .12s;
+  }
+  .kdo-volba .fajfka { font-size: clamp(24px, 3vw, 34px); line-height: 1; min-height: 1.1em; }
+  .kdo-volba:not(.hraje) { background: #C9BBA0; filter: grayscale(.7) brightness(.9); }
+  .kdo-volba:hover { transform: translateY(-3px); box-shadow: 0 9px 0 #7B5230; }
+  .kdo-volba:active { transform: translateY(3px); box-shadow: 0 2px 0 #7B5230; }
+  #vyplouvame { font-size: clamp(17px, 2.2vw, 24px); padding: 14px 30px; }
+  #vyplouvame:disabled { filter: grayscale(1) brightness(.8); cursor: default; }
+
+  #galerie { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; align-items: start; }
+  .pirat-volba {
+    background: none; border: none; padding: 0; cursor: pointer; width: 100%;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    transition: transform .12s;
+  }
+  /* Předlohy mají každá trochu jiný poměr stran – srovnáme je do stejného rámečku. */
+  .pirat-volba img {
+    width: 100%; aspect-ratio: 5 / 7; object-fit: cover; object-position: center;
+    border-radius: 12px; border: 5px solid #7B5230; display: block; box-shadow: 0 6px 14px #0006;
+  }
+  .pirat-volba span {
+    font-weight: bold; font-size: clamp(12px, 1.4vw, 16px); color: #4A2E10;
+    min-height: 2.6em; display: flex; align-items: center; text-align: center;
+  }
+  .pirat-volba:hover:not(:disabled) { transform: translateY(-6px) scale(1.03); }
+  .pirat-volba:disabled { cursor: default; opacity: .45; filter: grayscale(.8); }
+  .pirat-volba.zabrano span { color: #8A5C33; }
+
+  /* ================= oslava celé rodiny ================= */
+  #konfety { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 25; display: none; }
+  #konfety.videt { display: block; }
+  .konfeta {
+    position: absolute; top: -20px; width: 12px; height: 18px; border-radius: 2px;
+    animation: pada linear forwards;
+  }
+  @keyframes pada {
+    from { transform: translateY(-40px) rotate(0deg); opacity: 1; }
+    to   { transform: translateY(105vh) rotate(720deg); opacity: .9; }
+  }
+  #rodina h2 { font-size: clamp(28px, 6vw, 68px); animation: hop 1s ease-in-out infinite; }
+  @keyframes hop { 0%,100% { transform: scale(1) rotate(-2deg) } 50% { transform: scale(1.07) rotate(2deg) } }
+
+  /* ================= posádka (kdo co má) ================= */
+  #posadka { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; width: 100%; }
+  .clen {
+    display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 12px;
+    background: #00000033; border: 3px solid transparent; min-width: 150px;
+  }
+  .clen.aktivni { border-color: #FFF3D6; background: #00000055; }
+  .clen .tecka { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #2A1840; flex: none; }
+  .clen .jm { font-weight: bold; font-size: 14px; }
+  .clen .stav { font-size: 15px; margin-left: auto; letter-spacing: 1px; }
+
+  /* ================= karty na ruce ================= */
+  /* Tři kartičky se musí vejít do jedné řady – jinak sloupec přeteče
+     a hra by se rolovala, což nesmí. Proto se smrsknou, ne zalomí. */
+  /* Ruka drží pořád tři místa. Kdyby se řádek zvětšoval se sebranou
+     kartou, poskočilo by při každém itemu celé ovládání pod ním. */
+  #ruka { display: flex; gap: 8px; justify-content: center; flex-wrap: nowrap;
+          width: 100%; max-width: 420px; }
+  .misto {
+    flex: 1 1 0; min-width: 0; max-width: 124px;
+    aspect-ratio: 124 / 157;          /* stejně vysoké jako kartička */
+    border: 3px dashed #ffffff26; border-radius: 12px;
+  }
+  .karta {
+    flex: 1 1 0; min-width: 0; max-width: 124px; background: linear-gradient(#F5E7BE, #E0C68F);
+    border: 4px solid #7B5230; border-radius: 12px; padding: 6px 6px 4px;
+    cursor: pointer; font: inherit; color: #4A2E10; display: flex; flex-direction: column;
+    align-items: center; gap: 2px; box-shadow: 0 4px 0 #5E3D22; transition: transform .12s;
+  }
+  .karta:hover:not(:disabled) { transform: translateY(-6px); }
+  .karta:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 0 #5E3D22; }
+  .karta:disabled { cursor: default; filter: grayscale(.85) brightness(.85); opacity: .6; }
+  .karta svg { width: 100%; height: auto; display: block; }
+  .karta .nazev { font-weight: bold; font-size: clamp(10px, 1.2vw, 13px); }
+  .karta .popis { font-size: clamp(8px, 1vw, 11px); line-height: 1.15; text-align: center; }
+  .karta.pouzitelna { box-shadow: 0 4px 0 #5E3D22, 0 0 0 4px #F5C518; }
+
+  /* ================= otázka (utratit hvězdu?) ================= */
+  #otazka .panel { max-width: 560px; }
+  #otazka-tlacitka { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  #otazka-tlacitka button {
+    font: inherit; font-weight: bold; font-size: clamp(15px, 2vw, 20px); padding: 14px 22px;
+    border-radius: 14px; border: 5px solid #7B5230; cursor: pointer; box-shadow: 0 5px 0 #7B5230;
+    background: #C9A227; color: #2A1840; min-width: 190px;
+  }
+  #otazka-tlacitka button.ne { background: #E9CF95; }
+  #otazka-tlacitka button:active { transform: translateY(3px); box-shadow: 0 2px 0 #7B5230; }
+
+  /* ================= hláška nad figurkou =================
+     Bublina drží, dokud ji kód nesundá – dřív byla na pevných 1,6 s
+     a stihla zmizet, i když hra na text ještě čekala.               */
+  #hlaska {
+    opacity: 0; pointer-events: none;
+    transform: translateY(10px) scale(.88);
+    transition: opacity .18s ease-out, transform .18s ease-out;
+  }
+  #hlaska.videt { opacity: 1; transform: translateY(0) scale(1); }
+</style>
+</head>
+<body>
+
+<!-- ============ 1) kdo dnes pluje ============ -->
+<div class="prekryv videt" id="uvod-kdo">
+  <div class="panel">
+    <h2>🏴‍☠️ Theuščina pirátská hra</h2>
+    <p>Kdo dnes pluje k pokladu? Klikni na ty, co hrajou.</p>
+    <div id="kdo-volby"></div>
+    <button class="akce" id="vyplouvame" onclick="zacniHru()">Vyplouváme!</button>
+  </div>
+</div>
+
+<!-- ============ 2) jupíí, celá rodina ============ -->
+<div class="prekryv" id="rodina">
+  <div class="panel">
+    <h2>Jupíí, hraje celá rodina!</h2>
+    <p>Čtyři piráti, jedna truhla. Musíme doplout všichni.</p>
+    <button class="akce" onclick="zavriRodinu()">Vyplouváme!</button>
+  </div>
+</div>
+
+<!-- ============ 3) výběr pirátů ============ -->
+<div class="prekryv" id="uvod-pirati">
+  <div class="panel">
+    <h2 id="vyber-nadpis"></h2>
+    <p>Klikni na svého piráta</p>
+    <div id="galerie"></div>
+  </div>
+</div>
+
+<!-- ============ otázka během hry ============ -->
+<div class="prekryv" id="otazka">
+  <div class="panel">
+    <h2 id="otazka-nadpis"></h2>
+    <p id="otazka-text"></p>
+    <div id="otazka-tlacitka"></div>
+  </div>
+</div>
+
+<!-- ============ kraken vstupuje do hry ============ -->
+<div class="prekryv" id="kraken-karta">
+  <div id="vlna"></div>
+  <div id="kraken-splash">
+    <img src="karty/kraken.jpeg" alt="Kraken" id="kraken-obrazek" class="karta-obrazek">
+    <p>Z hlubiny se vynořil <b>KRAKEN</b>!<br>Pluje za vámi a koho dohoní, toho drží.</p>
+  </div>
+</div>
+
+<!-- ============ karta SALVA ============ -->
+<div class="prekryv" id="salva-karta">
+  <img src="karty/salva.png" alt="Salva" id="salva-obrazek" class="karta-obrazek">
+</div>
+
+<!-- ============ prohra ============ -->
+<div class="prekryv" id="prohra">
+  <div class="panel konec">
+    <img src="karty/prohra.png" alt="Kraken stáhl poklad do hlubiny" class="karta-obrazek">
+    <div class="konec-text">
+      <h2>🐙 Kraken byl rychlejší</h2>
+      <p id="prohra-text"></p>
+      <button class="akce" onclick="location.reload()">Zkusíme to znovu!</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 4) konec hry ============ -->
+<div class="prekryv" id="finale">
+  <div class="panel konec">
+    <img src="karty/vyhra.png" alt="Poklad je náš" class="karta-obrazek">
+    <div class="konec-text">
+      <h2>Poklad je náš!</h2>
+      <p id="finale-text"></p>
+      <button class="akce" onclick="location.reload()">Hrát znovu</button>
+    </div>
+  </div>
+</div>
+
+<div id="konfety"></div>
+
+<!-- ============ herní obrazovka ============ -->
+<div id="hra">
+  <div id="plocha"></div>
+  <div id="ovladani">
+    <h1>🏴‍☠️ Theuščina pirátská hra</h1>
+    <div id="posadka"></div>
+    <div id="kdo-hraje">
+      <img id="pirat-karta" alt="">
+      <div id="vyzva"></div>
+    </div>
+    <div class="volba" id="volba-boj"><span>⚔️ POMOZ KARTOU</span><small>místo běhu</small></div>
+    <div id="ruka"></div>
+    <div class="volba" id="volba-utek"><span>🏃 NEBO BĚŽ</span><small>klikni, co ti padlo</small></div>
+    <div id="kostky"></div>
+    <div style="display:flex;gap:10px">
+      <button class="akce" onclick="location.reload()">Od začátku</button>
+      <button class="akce" id="zvukTlacitko" onclick="prepniZvuk()" title="Zvuky"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   1. DATA HERNÍ PLOCHY
+   Cesta je jedna křivka; pole na ní jsou rovnoměrně rozmístěné body.
+   Změna typu pole = změna jednoho písmena v POLE.
+   ========================================================================== */
+
+// Rozměr je shodný s obrázkem plochy, takže souřadnice sedí 1:1.
+const W = 1448, H = 1086;
+const POCET_POLI = 45;            // 0 = molo (start), 44 = truhla (cíl)
+
+// Osa písečné pěšiny vystopovaná přímo z obrázku plocha/mapa.png.
+const KOSTRA = [
+  [514, 930], [518, 857], [560, 799], [628, 775], [701, 775], [770, 754],
+  [820, 702], [800, 637], [732, 615], [663, 636], [600, 673], [532, 699],
+  [459, 698], [400, 658], [426, 596], [490, 562], [529, 505], [484, 449],
+  [456, 387], [515, 349], [584, 368], [635, 420], [690, 468], [758, 495],
+  [827, 518], [900, 524], [963, 491], [953, 423], [981, 366], [1053, 357],
+  [1121, 334], [1138, 272], [1096, 213], [1138, 158]
+];
+
+// w klid | p chapadlo | y item | r salva | b bažina (stojíš) | c zkratka
+// Bonusů je schválně málo – nebezpečím je kraken, ne políčka.
+// Salvová pole musí být od 13. dál – dřív kraken ještě nevyplul.
+// Chapadla jsou rozprostřená po celé cestě, ne nahloučená u lagun —
+// dřív seděla na 19/21 a 34/35 a poslední třetina neměla čím krakena
+// brzdit. Salvové pole 35 dává posádce obranu i v závěru.
+const MISTA = {
+  p: [19, 22, 26, 30, 37],          // chapadla rozprostřená po cestě
+  r: [15, 23, 35, 38, 42],          // salva
+  y: [2, 6, 13, 21, 33, 40],        // item
+  b: [17, 8, 28, 41, 36, 43]        // bažina, stojíš kolo; 8 = kdo minul první zkratku
+};
+
+// Obtížnost se ladí počtem barevných políček. Čtyři hráči mají nejtěžší mapu.
+// Naměřeno simulacemi, viz dokumentace/obtiznost.md.
+const OBTIZNOST = {
+  1: { p: 0, r: 4, y: 6, b: 1 },
+  2: { p: 1, r: 4, y: 6, b: 2 },
+  3: { p: 2, r: 5, y: 6, b: 2 },
+  4: { p: 5, r: 3, y: 6, b: 4 }
+};
+
+let POLE = {};
+
+function sestavPole(pocetHracu) {
+  const mix = OBTIZNOST[Math.min(4, Math.max(1, pocetHracu))];
+  POLE = {};
+  for (const typ of ['p', 'r', 'y', 'b']) {
+    MISTA[typ].slice(0, mix[typ]).forEach(i => { POLE[i] = typ; });
+  }
+  ZKRATKY.forEach(([z]) => { POLE[z] = 'c'; });
+}
+
+const ZKRATKY = [[7, 12], [24, 29]];
+
+// --- kraken ---
+let KRAKEN_PO_KOLECH = 2;      // vynoří se, až všichni odehrají dva tahy
+// Menší kostka = mírnější kraken. Kostku hází počítač za krakena,
+// takže může mít i pět stěn – na stole ji nikdo nehledá.
+// Salvové pole krakena omráčí, takže posádka má silnou brzdu a kraken
+// snese plné D6. Naměřeno pro čtyři hráče: D6 + tři chapadla + čtyři
+// salvová pole = 71 %. Menší posádky mají míň salv a mečů, ty mají D5.
+// v4: s provazem se neztrácí ani jeden hozený bod, posádka je proto
+// mnohem rychlejší a kraken musí zrychlit skoro dvaapůlkrát.
+// Kraken pluje klidně a hlavně KAŽDÉ kolo. Dřív byl rychlý, ale posádka
+// ho uměla omráčit tak často, že tři čtvrtiny kol prostál — z monstra
+// byl někdo, kdo pořád leží. Radši pomalu a pořád než rychle a nikdy.
+const KRAKEN_ZAKLAD = { 1: 0, 2: 0, 3: 0, 4: 0 };
+// Kraken hází poctivou šestkou jako všichni ostatní – žádná divná
+// kostka. Hrozbu nenese jeho rychlost, ale chapadlová pole.
+const KOSTKA_KRAKENA = { 1: 4, 2: 5, 3: 5, 4: 6 };
+function stenKrakena() { return KOSTKA_KRAKENA[Math.min(4, hraci.length)] || 6; }
+function zakladKrakena() { return KRAKEN_ZAKLAD[Math.min(4, hraci.length)] || 0; }
+let KRAKEN_ZPOMALENI = 1;      // 1 = kořist ho vůbec nebrzdí
+let VYKROUCENI_OD = 4;         // co musíš hodit, aby ses vykroutil sám
+/* Volba mezi kartou a během je vidět na obrazovce sama: buď hráč klikne
+   na kartu, nebo na kostku. Zvláštní tlačítko „běžím" tu bylo, ale byl
+   to jen klik navíc pro něco, co je zřejmé. */
+let LANO_SPOUTA = false;       // spoutá lano krakena, nebo jen osvobodí?
+let POKLAD_TAHNE = true;       // kdo je u pokladu, táhne za lano místo kanónu
+/* Zeštíhlení: dřív měl skoro každý prvek sílu 3 až 6 a k tomu omráčení.
+   Efekty se navzájem rušily a hra se rozpadla na „procházka, nebo drama".
+   Teď má všechno malý dopad a obtížnost se ladí jedinou pákou – kostkou
+   krakena. Omráčení nezůstalo nikde: bere krakenovi tah, a to je to
+   jediné, co ho z hry vyřadí úplně. */
+let SALVA_OMRACI = false;      // bere salvové pole krakenovi celý tah?
+let MEC_DOSAH = 2;             // na kolik polí meč dosáhne na krakena
+let MEC_ODSUN = 1;             // o kolik sek odhodí osvobozeného dopředu
+let MEC_ODRAZ = 2;             // o kolik sek odhodí krakena dozadu
+let LANO_ODRAZ = 1;            // o kolik odhodí krakena hod lana
+let SUD_DOSAH = 4;             // na kolik polí se dá sud po krakenovi hodit
+let MINA_ODRAZ = 1;            // šlápnutí na sud je slabší než mířený výstřel
+let SUD_ODRAZ = 2;             // o kolik ho výbuch odhodí (navíc mu vezme
+                               // zbytek kola, což samo o sobě váží dost)
+let RUM_KROKY = 1;             // o kolik posune rum celou posádku
+let CHAPADLO_ZPET = 2;         // o kolik chapadlo strhne piráta dozadu
+let CHAPADLO_VPRED = 5;        // o kolik se tím kraken přitáhne dopředu
+                               // (radši víc polí o síle 5 než jedno o síle 7)
+                               // (4 dá 87 %, 5 dá 80 %, 6 už 68 %)
+
+// Zašlé barvy jako na staré mapě – syté odstíny působily na malované
+// ploše jako nalepené. Bílá je krémový pergamen, ne čistá běloba.
+// Zkratka byla zelená a na zelené džungli splývala. Tyrkys je proti
+// mapě i proti modré zlé vodě (#3F6B85) jasně rozeznatelný.
+const BARVA = { w:'#F0E3C2', r:'#B04A31', y:'#D2A03C', p:'#6F5A8E',
+                b:'#3F6B85', c:'#1FA9C4', k:'#4A3A63' };
+const BARVA_ZKRATKY = '#1FA9C4';
+const LEM_POLE = '#F7EFD9';    // světlý lem kolem puntíku
+const OBRYS_POLE = '#4A3520';  // tmavě hnědý obrys
+
+const PIRATI = [
+  { id:'jahoda',   jmeno:'Kapitán Vostrá Jahoda', barva:'#D33B2C', obrazek:'karty/jahoda.jpeg' },
+  { id:'lilek',    jmeno:'Drsnej Lilek',          barva:'#7B4FBF', obrazek:'karty/lilek.jpeg' },
+  { id:'hrozinka', jmeno:'Hrozivá Hrozinka',      barva:'#2F79D0', obrazek:'karty/hrozinka.jpeg' },
+  { id:'rumajs',   jmeno:'Ospalý Rumajs',         barva:'#C9A227', obrazek:'karty/rumajs.jpeg' }
+];
+
+// Pořadí výběru je dané a neměnné. Všechna jména se píšou velkým písmenem.
+// Pády i rod si vezeme s sebou, ať hra mluví česky, ať hraje kdokoli.
+const OSOBY = [
+  { jmeno: 'Artík',   osloveni: 'Artíku',  koho: 'Artíka',  rod: 'm' },
+  { jmeno: 'Theuška', osloveni: 'Theuško', koho: 'Theušku', rod: 'z' },
+  { jmeno: 'Mamka',   osloveni: 'Mamko',   koho: 'Mamku',   rod: 'z' },
+  { jmeno: 'Taťka',   osloveni: 'Taťko',   koho: 'Taťku',   rod: 'm' }
+];
+
+/* Vybere tvar slova podle rodu hráče. */
+function rod(h, muzsky, zensky) { return h.rod === 'z' ? zensky : muzsky; }
+
+/* ---------- karty předmětů ---------- */
+const KARTY = {
+  mec: {
+    jmeno: 'Meč', popis: 'Prosekne chapadla, i ta co drží tebe. Zblízka sekne krakena',
+    kresba: `<svg viewBox="0 0 100 100">
+      <path d="M 16 84 C 34 76 62 52 84 18 C 62 26 34 52 20 76 Z" fill="#DDE4EA" stroke="#4E5A66" stroke-width="4" stroke-linejoin="round"/>
+      <path d="M 22 74 C 40 56 64 34 80 24" fill="none" stroke="#FFFFFF" stroke-width="3" opacity=".8"/>
+      <path d="M 10 90 L 26 74" stroke="#8A5C33" stroke-width="11" stroke-linecap="round"/>
+      <path d="M 14 72 L 30 88" stroke="#C9A227" stroke-width="8" stroke-linecap="round"/>
+    </svg>`
+  },
+  rum: {
+    jmeno: 'Rum', popis: 'Vytáhne kamaráda z bažiny a postrčí ho dál',
+    kresba: `<svg viewBox="0 0 100 100">
+      <rect x="40" y="10" width="20" height="20" rx="3" fill="#8A5C33" stroke="#3A2412" stroke-width="4"/>
+      <path d="M 34 32 L 66 32 C 74 44 76 56 76 70 C 76 84 70 90 50 90 C 30 90 24 84 24 70 C 24 56 26 44 34 32 Z"
+            fill="#A9722F" stroke="#3A2412" stroke-width="4" stroke-linejoin="round"/>
+      <rect x="30" y="52" width="40" height="24" rx="3" fill="#F5E7BE" stroke="#3A2412" stroke-width="3"/>
+      <text x="50" y="70" text-anchor="middle" font-size="17" font-weight="bold" fill="#3A2412"
+            font-family="Verdana,sans-serif">RUM</text>
+    </svg>`
+  },
+  sud: {
+    jmeno: 'Sud prachu', popis: 'Past na cestě. Bouchne výstřelem, nebo když na ni kraken šlápne',
+    kresba: `<svg viewBox="0 0 100 100">
+      <path d="M 30 26 L 70 26 C 78 42 80 58 80 68 C 80 82 68 90 50 90
+               C 32 90 20 82 20 68 C 20 58 22 42 30 26 Z"
+            fill="#8A5C33" stroke="#3A2412" stroke-width="4" stroke-linejoin="round"/>
+      <path d="M 22 46 L 78 46 M 21 66 L 79 66" stroke="#3A2412" stroke-width="6"/>
+      <path d="M 36 30 L 33 86 M 50 27 L 50 89 M 64 30 L 67 86"
+            stroke="#6B4526" stroke-width="2.5"/>
+      <path d="M 50 26 C 52 16 62 16 64 8" fill="none" stroke="#4A3520"
+            stroke-width="5" stroke-linecap="round"/>
+      <g fill="#F2A03C">
+        <path d="M 64 10 C 70 2 76 2 82 0 C 76 6 74 8 72 10 C 76 12 78 14 84 18
+                 C 76 16 70 16 64 10 Z"/>
+      </g>
+      <circle cx="66" cy="9" r="4" fill="#FFE9A0"/>
+    </svg>`
+  },
+  pistole: {
+    jmeno: 'Pistole', popis: 'Střelí krakena i sud přes celou mapu. Osvobodí kamaráda',
+    kresba: `<svg viewBox="0 0 100 100">
+      <!-- pažba: zahnutá, dřevěná, s mosazným kováním na patce -->
+      <path d="M 30 46 L 50 44 C 46 60 38 76 29 87 C 23 93 13 90 13 82
+               C 14 68 21 55 30 46 Z"
+            fill="#8A5C33" stroke="#3A2412" stroke-width="4" stroke-linejoin="round"/>
+      <path d="M 29 87 C 23 93 13 90 13 82" fill="none" stroke="#C9A227"
+            stroke-width="6" stroke-linecap="round"/>
+      <path d="M 24 62 L 39 58" stroke="#6B4526" stroke-width="2.5" stroke-linecap="round"/>
+      <!-- lučík se spouští -->
+      <path d="M 44 50 C 47 61 57 60 59 50" fill="none" stroke="#1E2226"
+            stroke-width="4" stroke-linecap="round"/>
+      <!-- zámek -->
+      <path d="M 30 32 L 58 29 L 60 48 L 33 50 Z"
+            fill="#4A5157" stroke="#1E2226" stroke-width="3.5" stroke-linejoin="round"/>
+      <circle cx="45" cy="39" r="4" fill="#C9A227" stroke="#1E2226" stroke-width="2"/>
+      <!-- kohoutek: esíčko křesadlovky -->
+      <path d="M 35 30 C 30 21 34 13 43 13 C 38 19 39 25 44 27" fill="none"
+            stroke="#1E2226" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- hlaveň: dlouhá a štíhlá, ne bloková -->
+      <path d="M 55 30 L 88 25 L 90 34 L 57 41 Z"
+            fill="#3A3F45" stroke="#1E2226" stroke-width="3.5" stroke-linejoin="round"/>
+      <!-- rozšířené ústí -->
+      <path d="M 86 22 L 96 21 L 97 37 L 88 36 Z"
+            fill="#4A5157" stroke="#1E2226" stroke-width="3.5" stroke-linejoin="round"/>
+    </svg>`
+  }
+};
+
+const NAZEV_POLE = { w:'klid ⚪', r:'SALVA 💥', y:'item 🎁', p:'kraken 🐙',
+                     b:'bažina 🥾', c:'zkratka 🌿' };
+
+/* ==========================================================================
+   2. GEOMETRIE
+   ========================================================================== */
+
+function catmullRom(body, vzorku = 90) {
+  const p = [body[0], ...body, body[body.length - 1]];
+  const ven = [];
+  for (let i = 0; i < p.length - 3; i++) {
+    const [a, b, c, d] = [p[i], p[i+1], p[i+2], p[i+3]];
+    for (let s = 0; s < vzorku; s++) {
+      const t = s / vzorku, t2 = t*t, t3 = t2*t;
+      ven.push([
+        0.5 * (2*b[0] + (-a[0]+c[0])*t + (2*a[0]-5*b[0]+4*c[0]-d[0])*t2 + (-a[0]+3*b[0]-3*c[0]+d[0])*t3),
+        0.5 * (2*b[1] + (-a[1]+c[1])*t + (2*a[1]-5*b[1]+4*c[1]-d[1])*t2 + (-a[1]+3*b[1]-3*c[1]+d[1])*t3)
+      ]);
+    }
+  }
+  ven.push(body[body.length - 1]);
+  return ven;
+}
+
+function rovnomerne(krivka, n) {
+  const d = [0];
+  for (let i = 1; i < krivka.length; i++)
+    d.push(d[i-1] + Math.hypot(krivka[i][0]-krivka[i-1][0], krivka[i][1]-krivka[i-1][1]));
+  const celkem = d[d.length-1], ven = [];
+  let j = 0;
+  for (let k = 0; k < n; k++) {
+    const cil = celkem * k / (n - 1);
+    while (j < d.length - 2 && d[j+1] < cil) j++;
+    const t = (cil - d[j]) / ((d[j+1] - d[j]) || 1);
+    ven.push([ krivka[j][0] + (krivka[j+1][0]-krivka[j][0]) * t,
+               krivka[j][1] + (krivka[j+1][1]-krivka[j][1]) * t ]);
+  }
+  return ven;
+}
+
+const KRIVKA = catmullRom(KOSTRA);
+const BOD = rovnomerne(KRIVKA, POCET_POLI);
+const CESTA_D = 'M ' + KRIVKA.map(([x,y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L ');
+
+/* ==========================================================================
+   3. KRESLENÍ PLOCHY
+   ========================================================================== */
+
+function chapadla(x, y) {
+  let o = `<g transform="translate(${x.toFixed(0)},${y.toFixed(0)})">`;
+  for (const [uhel, delka, stoc] of [[-140,56,1], [-40,62,-1], [55,53,1], [150,59,-1], [95,44,1]]) {
+    const a = uhel * Math.PI / 180;
+    const ex = Math.cos(a)*delka, ey = Math.sin(a)*delka;
+    const cx = Math.cos(a)*delka*0.5 - ey*0.34*stoc;
+    const cy = Math.sin(a)*delka*0.5 + ex*0.34*stoc;
+    const d = `M 0 0 Q ${cx.toFixed(0)} ${cy.toFixed(0)} ${ex.toFixed(0)} ${ey.toFixed(0)}`;
+    o += `<path d="${d}" fill="none" stroke="#3A2456" stroke-width="11" stroke-linecap="round"/>`;
+    o += `<path d="${d}" fill="none" stroke="#6B4B96" stroke-width="4.5" stroke-linecap="round" opacity="0.8"/>`;
+  }
+  return o + '</g>';
+}
+
+/* Kraken plovoucí za posádkou – vlastní figura na cestě. */
+function krakenSVG() {
+  // Token má v předloze černé rohy i tmavý rám, proto ho zvětšíme a ořízneme
+  // až do fialového středu a posadíme na bílý terč, ať je na písku vidět.
+  return `<g id="kraken" style="display:none">
+    <defs><clipPath id="krakenOrez"><circle r="36"/></clipPath>
+      <filter id="projasni"><feComponentTransfer>
+        <feFuncR type="linear" slope="1.5" intercept="0.06"/>
+        <feFuncG type="linear" slope="1.35" intercept="0.04"/>
+        <feFuncB type="linear" slope="1.7" intercept="0.10"/>
+      </feComponentTransfer></filter></defs>
+    <circle r="47" fill="#000" opacity="0.3"/>
+    <circle r="44" fill="#FFFDF5"/>
+    <image filter="url(#projasni)" href="karty/kraken%20token.jpeg" x="-53" y="-53" width="106" height="106"
+           clip-path="url(#krakenOrez)" preserveAspectRatio="xMidYMid slice"/>
+    <circle r="44" fill="none" stroke="#FFFFFF" stroke-width="5"/>
+    <circle r="47" fill="none" stroke="#3E2A5A" stroke-width="3.5"/>
+  </g>`;
+}
+
+function policko(i) {
+  const [x, y] = BOD[i];
+  const typ = POLE[i] || 'w';
+  let o = `<g class="pole" data-i="${i}">
+    <circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="22" fill="${BARVA[typ]}"
+            stroke="${LEM_POLE}" stroke-width="4.5" filter="url(#stin)"/>
+    <circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="24.5" fill="none"
+            stroke="${OBRYS_POLE}" stroke-width="2.2" opacity="0.8"/>`;
+  if (typ === 'c') {
+    o += `<g transform="translate(${x.toFixed(0)},${y.toFixed(0)})" stroke="#FFFFFF" stroke-width="4"
+             fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M -8 -7 L -1 0 L -8 7"/><path d="M 1 -7 L 8 0 L 1 7"/></g>`;
+  }
+  return o + '</g>';
+}
+
+function sipkaZkratky(z, na) {
+  const A = BOD[z], B = BOD[na];
+  const mx = (A[0]+B[0])/2, my = (A[1]+B[1])/2;
+  const vnitrni = BOD[Math.round((z+na)/2)];
+  const vx = mx - vnitrni[0], vy = my - vnitrni[1];
+  const n = Math.hypot(vx, vy) || 1;
+  const C = [mx + vx/n*55, my + vy/n*55];   // mírné vyklenutí, ať šipka drží u cesty
+
+  // Křivku zkrátíme, aby ani jeden konec nezasahoval do políčka:
+  // políčko má poloměr necelých 26, k tomu pár jednotek mezery.
+  const ODSTUP = 32;
+  const bod = t => {
+    const u = 1 - t;
+    return [u*u*A[0] + 2*u*t*C[0] + t*t*B[0],
+            u*u*A[1] + 2*u*t*C[1] + t*t*B[1]];
+  };
+  const dal = (t, P) => Math.hypot(bod(t)[0] - P[0], bod(t)[1] - P[1]);
+  let t0 = 0, t1 = 1;
+  for (let i = 0; i <= 200; i++) { const t = i/200; if (dal(t, A) >= ODSTUP) { t0 = t; break; } }
+  for (let i = 200; i >= 0; i--) { const t = i/200; if (dal(t, B) >= ODSTUP) { t1 = t; break; } }
+  if (t1 <= t0) { t0 = 0; t1 = 1; }
+
+  // useknutá část kvadratické křivky (de Casteljau)
+  const Q0 = bod(t0), Q2 = bod(t1);
+  const s = (t1 - t0) / (1 - t0 || 1);
+  const R0 = [(1-t0)*C[0] + t0*B[0], (1-t0)*C[1] + t0*B[1]];
+  const Q1 = [(1-s)*Q0[0] + s*R0[0], (1-s)*Q0[1] + s*R0[1]];
+  const d = `M ${Q0[0].toFixed(0)} ${Q0[1].toFixed(0)}` +
+            ` Q ${Q1[0].toFixed(0)} ${Q1[1].toFixed(0)}` +
+            ` ${Q2[0].toFixed(0)} ${Q2[1].toFixed(0)}`;
+
+  return `<path d="${d}" fill="none" stroke="#0C3D4C" stroke-width="11"
+     stroke-linecap="round" stroke-dasharray="12 9" opacity="0.4"/>
+   <path d="${d}" fill="none" stroke="${BARVA_ZKRATKY}" stroke-width="6"
+     stroke-linecap="round" stroke-dasharray="12 9" marker-end="url(#hrot)"/>`;
+}
+
+// Figurka stojí na políčku, proto je posunutá nad jeho střed.
+function figurkaSVG(p, poradi = 0) {
+  return `<g class="figurka" id="figurka-${p.id}" transform="translate(${BOD[0][0]},${BOD[0][1]})">
+   <g class="houpani" style="animation-delay:${(poradi * 0.55).toFixed(2)}s">
+    <g class="skokvrstva">
+    <g transform="translate(0,-18) scale(1.15)">
+      <ellipse cx="0" cy="24" rx="15" ry="5" fill="#000" opacity="0.3"/>
+      <path d="M -14 22 C -14 3 -8 -3 0 -3 C 8 -3 14 3 14 22 Z" fill="${p.barva}"
+            stroke="#2A1840" stroke-width="3.5" stroke-linejoin="round"/>
+      <circle cx="0" cy="-12" r="11.5" fill="#F2C79B" stroke="#2A1840" stroke-width="3.5"/>
+      <path d="M -17 -19 C -10 -31 10 -31 17 -19 C 8 -23 -8 -23 -17 -19 Z"
+            fill="#2A1840" stroke="#2A1840" stroke-width="3" stroke-linejoin="round"/>
+      <circle cx="-4" cy="-13" r="2.2" fill="#2A1840"/><circle cx="5" cy="-13" r="2.2" fill="#2A1840"/>
+    </g>
+    </g>
+    <g class="chapadlo">
+      <path d="M -30 -4 C -24 20 24 20 30 -4" fill="none" stroke="#3A2456"
+            stroke-width="15" stroke-linecap="round"/>
+      <path d="M -30 -4 C -24 20 24 20 30 -4" fill="none" stroke="#6B4B96"
+            stroke-width="7" stroke-linecap="round"/>
+      <path d="M -30 -4 C -24 20 24 20 30 -4" fill="none" stroke="#C9A9E8"
+            stroke-width="4" stroke-linecap="round" stroke-dasharray="1 11"/>
+    </g>
+   </g>
+  </g>`;
+}
+
+function plochaSVG() {
+  const zkratky = ZKRATKY.map(([z, na]) => sipkaZkratky(z, na)).join('');
+  const policka = Array.from({ length: POCET_POLI - 2 }, (_, k) => policko(k + 1)).join('');
+  const figurky = hraci.map((h, i) => figurkaSVG(h.pirat, i)).join('');
+
+  // Slabá nit pod puntíky, aby bylo vidět, kudy se pokračuje.
+  const nit = `<path d="${CESTA_D}" fill="none" stroke="#4A2E10" stroke-width="7"
+               stroke-linecap="round" opacity="0.28"/>`;
+
+  const [sx, sy] = BOD[0], [cx, cy] = BOD[POCET_POLI - 1];
+
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="stin" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-opacity="0.45"/></filter>
+    <!-- hrot jen jako otevřená čárová špička, plný trojúhelník rušil -->
+    <marker id="hrot" markerWidth="4" markerHeight="4" refX="2.9" refY="2" orient="auto">
+      <path d="M 0.7 0.5 L 2.9 2 L 0.7 3.5" fill="none" stroke="${BARVA_ZKRATKY}"
+            stroke-width="0.9" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+
+  <image href="plocha/mapa.png" x="0" y="0" width="${W}" height="${H}"
+         preserveAspectRatio="none"/>
+
+  ${nit}${policka}${zkratky}
+
+  <!-- START: molo -->
+  <g transform="translate(${sx.toFixed(0)},${sy.toFixed(0)})">
+    <circle r="32" fill="none" stroke="#8B6FD4" stroke-width="8" opacity="0.95"/>
+    <circle r="32" fill="none" stroke="#FFFFFF" stroke-width="2.5"/>
+  </g>
+
+  <!-- CÍL: truhla s pokladem -->
+  <g id="truhla" transform="translate(${cx.toFixed(0)},${cy.toFixed(0)})">
+    <circle r="36" fill="none" stroke="#F6D66B" stroke-width="9" opacity="0.95"/>
+    <circle r="36" fill="none" stroke="#3A2412" stroke-width="2.5"/>
+  </g>
+
+  ${krakenSVG()}
+  <!-- dráha střely: krátce blikne, aby byl let čitelný -->
+  <line id="draha" x1="0" y1="0" x2="0" y2="0" stroke="#FFE9A0" stroke-width="7"
+        stroke-linecap="round" stroke-dasharray="10 14" opacity="0"/>
+  <!-- dělová koule – musí být vidět i na pestré mapě, proto žhne -->
+  <g id="sudy"></g>
+  <g id="efekty"></g>
+  <g id="terce"></g>
+  <g id="koule" style="display:none">
+    <circle r="30" fill="#F2A03C" opacity="0.28"/>
+    <circle r="20" fill="#2A1840" stroke="#F2A03C" stroke-width="6"/>
+    <circle r="8" fill="#FFE9A0"/>
+  </g>
+  <g id="aktivni-krouzek"><circle cx="0" cy="0" r="31" fill="none" stroke="#FFF3D6" stroke-width="5"/></g>
+  ${figurky}
+  <text id="pocitadlo" x="0" y="0"></text>
+  <g id="hlaska">
+    <rect id="hlaska-ram" rx="14" fill="#FFF3D6" stroke="#2A1840" stroke-width="4"/>
+    <text id="hlaska-text" text-anchor="middle" font-size="34" font-weight="bold" fill="#2A1840"></text>
+  </g>
+</svg>`;
+}
+
+/* ==========================================================================
+   3b. ZVUKY – všechny se generují v prohlížeči, nic se nestahuje
+   ========================================================================== */
+
+let audio = null;
+let zvukZapnut = localStorage.getItem('piratskaHraZvuk') !== 'ne';
+
+function zvukovyKontext() {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+  if (audio.state === 'suspended') audio.resume();
+  return audio;
+}
+
+function prepniZvuk() {
+  zvukZapnut = !zvukZapnut;
+  localStorage.setItem('piratskaHraZvuk', zvukZapnut ? 'ano' : 'ne');
+  document.getElementById('zvukTlacitko').textContent = zvukZapnut ? '🔊' : '🔇';
+  if (zvukZapnut) prehraj('hvezda');
+}
+
+function ton({ f = 440, f2 = null, delka = .18, typ = 'sine', hl = .16, cas = 0 }) {
+  const c = zvukovyKontext(), t = c.currentTime + cas;
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = typ;
+  o.frequency.setValueAtTime(f, t);
+  if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + delka);
+  g.gain.setValueAtTime(.0001, t);
+  g.gain.exponentialRampToValueAtTime(hl, t + .012);
+  g.gain.exponentialRampToValueAtTime(.0001, t + delka);
+  o.connect(g).connect(c.destination);
+  o.start(t); o.stop(t + delka + .03);
+}
+
+function sum({ delka = .3, od = 1200, na = 300, hl = .12, cas = 0 }) {
+  const c = zvukovyKontext(), t = c.currentTime + cas;
+  const n = Math.max(1, Math.floor(c.sampleRate * delka));
+  const buf = c.createBuffer(1, n, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const s = c.createBufferSource(); s.buffer = buf;
+  const filtr = c.createBiquadFilter(); filtr.type = 'lowpass';
+  filtr.frequency.setValueAtTime(od, t);
+  filtr.frequency.exponentialRampToValueAtTime(na, t + delka);
+  const g = c.createGain(); g.gain.value = hl;
+  s.connect(filtr).connect(g).connect(c.destination);
+  s.start(t); s.stop(t + delka);
+}
+
+const ZVUKY = {
+  kostka:   () => ton({ f: 640, f2: 320, delka: .09, typ: 'square', hl: .10 }),
+  krok:     i  => ton({ f: 300 + (i % 6) * 45, delka: .07, typ: 'triangle', hl: .06 }),
+  hvezda:   () => [660, 880, 1320].forEach((f, k) => ton({ f, delka: .16, hl: .13, cas: k * .08 })),
+  boure:    () => { sum({ delka: .6, od: 700, na: 120, hl: .16 });
+                    ton({ f: 115, f2: 65, delka: .5, typ: 'sawtooth', hl: .07 }); },
+  kraken:   () => { ton({ f: 150, f2: 55, delka: .75, typ: 'sawtooth', hl: .13 });
+                    sum({ delka: .5, od: 420, na: 90, hl: .12, cas: .06 }); },
+  proud:    () => sum({ delka: .55, od: 300, na: 2400, hl: .13 }),
+  zachrana: () => [520, 780].forEach((f, k) => ton({ f, delka: .2, hl: .13, cas: k * .1 })),
+  karta:    () => sum({ delka: .12, od: 3200, na: 800, hl: .09 }),
+  salva:    () => { sum({ delka: .35, od: 2400, na: 90, hl: .2 });
+                    ton({ f: 140, f2: 45, delka: .4, typ: 'sawtooth', hl: .12 }); },
+  poklad:   () => [523, 659, 784, 1046].forEach((f, k) =>
+                    ton({ f, delka: .3, typ: 'triangle', hl: .15, cas: k * .1 })),
+  finale:   () => [523, 659, 784, 1046, 784, 1046, 1319].forEach((f, k) =>
+                    ton({ f, delka: .38, typ: 'triangle', hl: .15, cas: k * .14 }))
+};
+
+function prehraj(jmeno, arg) {
+  if (!zvukZapnut) return;
+  try { ZVUKY[jmeno](arg); } catch (e) { /* zvuk nikdy nesmí shodit hru */ }
+}
+
+/* ---------- drobné animace ---------- */
+
+function zatres() {
+  const p = document.getElementById('plocha');
+  p.classList.remove('tresk'); void p.offsetWidth; p.classList.add('tresk');
+}
+
+function poskoc(h) {
+  const g = document.querySelector('#figurka-' + h.pirat.id + ' .skokvrstva');
+  if (!g) return;
+  g.classList.remove('skok'); void g.getBoundingClientRect(); g.classList.add('skok');
+}
+
+function zablesknTruhlu() {
+  const t = document.getElementById('truhla');
+  if (!t) return;
+  t.classList.remove('zablesk'); void t.getBoundingClientRect(); t.classList.add('zablesk');
+}
+
+/* ==========================================================================
+   4. STAV HRY
+   ========================================================================== */
+
+let hraci = [];          // { jmeno, pirat, pole, posun, stoji, chycen, dokoncil, karty }
+let naTahu = 0;
+let bezi = false;        // právě běží animace tahu
+let lzeHrat = false;     // hra čeká na klik na kostku
+let odehranychTahu = 0;
+let kraken = { pole: 0, aktivni: false, bonus: 0, hodNavic: false };
+/* Položené sudy prachu. Sud se nepoužije na krakena přímo — položí se
+   na políčko a čeká, až ho někdo z posádky trefí pistolí přes celou mapu.
+   To je jediná věc ve hře, na které se musí domluvit dva hráči. */
+let sudy = [];
+
+/* ---------- úvodní obrazovky ---------- */
+
+function ukaz(id, ano) { document.getElementById(id).classList.toggle('videt', ano); }
+
+/* Kdo dnes hraje – ne kolik jich je, ale kteří.
+   Bez toho by se taťka do tříčlenné hry vůbec nedostal. */
+const kdoHraje = new Set([0, 1, 2, 3]);
+let poradiVyberu = [];
+let vybirajici = 0;
+
+function vykresliKdo() {
+  const box = document.getElementById('kdo-volby');
+  box.innerHTML = OSOBY.map((o, i) => `
+    <button class="kdo-volba ${kdoHraje.has(i) ? 'hraje' : ''}" data-i="${i}">
+      <span class="fajfka">${kdoHraje.has(i) ? '✔' : ''}</span>
+      <span>${o.jmeno}</span>
+    </button>`).join('');
+  box.querySelectorAll('.kdo-volba').forEach(b => {
+    b.onclick = () => {
+      const i = +b.dataset.i;
+      if (kdoHraje.has(i)) kdoHraje.delete(i); else kdoHraje.add(i);
+      vykresliKdo();
+    };
+  });
+  document.getElementById('vyplouvame').disabled = kdoHraje.size === 0;
+}
+
+function zacniHru() {
+  if (!kdoHraje.size) return;
+  poradiVyberu = [0, 1, 2, 3].filter(i => kdoHraje.has(i));   // pořadí zůstává dané
+  hraci = [];
+  vybirajici = 0;
+  ukaz('uvod-kdo', false);
+  if (poradiVyberu.length === 4) { ukaz('rodina', true); konfety(); }
+  else vyberPirata();
+}
+
+function zavriRodinu() {
+  ukaz('rodina', false);
+  document.getElementById('konfety').classList.remove('videt');
+  vyberPirata();
+}
+
+function konfety() {
+  const box = document.getElementById('konfety');
+  box.classList.add('videt');
+  box.innerHTML = '';
+  const barvy = ['#D33B2C', '#F5C518', '#8B6FD4', '#2F79D0', '#3FB86B', '#FFF3D6'];
+  for (let i = 0; i < 90; i++) {
+    const k = document.createElement('div');
+    k.className = 'konfeta';
+    k.style.left = Math.random() * 100 + 'vw';
+    k.style.background = barvy[i % barvy.length];
+    k.style.animationDuration = (2.4 + Math.random() * 2.2) + 's';
+    k.style.animationDelay = (Math.random() * 1.6) + 's';
+    box.appendChild(k);
+  }
+}
+
+function vyberPirata() {
+  if (vybirajici >= poradiVyberu.length) { spustHru(); return; }
+  ukaz('uvod-pirati', true);
+  document.getElementById('vyber-nadpis').textContent =
+    `${OSOBY[poradiVyberu[vybirajici]].osloveni} — vyber si piráta`;
+
+  const box = document.getElementById('galerie');
+  box.innerHTML = '';
+  for (const p of PIRATI) {
+    const majitel = hraci.find(h => h.pirat.id === p.id);
+    const b = document.createElement('button');
+    b.className = 'pirat-volba' + (majitel ? ' zabrano' : '');
+    b.disabled = !!majitel;
+    b.innerHTML = `<img src="${p.obrazek}" alt="${p.jmeno}">
+                   <span>${majitel ? '✔ ' + majitel.jmeno : p.jmeno}</span>`;
+    b.onclick = () => {
+      if (vybirajici >= poradiVyberu.length) return;   // výběr už skončil
+      hraci.push({ ...OSOBY[poradiVyberu[vybirajici]], pirat: p, pole: 0, posun: 0,
+                   stoji: 0, chycen: false, dokoncil: false,
+                   karty: [] });
+      vybirajici++;
+      vyberPirata();
+    };
+    box.appendChild(b);
+  }
+}
+
+/* ---------- rozjezd hry ---------- */
+
+function spustHru() {
+  ukaz('uvod-pirati', false);
+  naTahu = 0;
+  bezi = false;
+  odehranychTahu = 0;
+  kraken = { pole: 0, aktivni: false, bonus: 0, hodNavic: false, zastaven: false };
+  sudy = [];
+  videneEfekty.clear();
+  sestavPole(hraci.length);
+  zamichejBalicek();
+  document.getElementById('plocha').innerHTML = plochaSVG();
+  vykresliSudy();
+  postavFigurky();
+  vykresliKostky();
+  naRade();
+}
+
+function postavFigurky() {
+  const naPoli = {};
+  for (const h of hraci) (naPoli[h.pole] ||= []).push(h);
+  for (const pole of Object.keys(naPoli)) {
+    const skupina = naPoli[pole];
+    skupina.forEach((h, i) => { h.posun = (i - (skupina.length - 1) / 2) * 21; });
+  }
+  hraci.forEach(umisti);
+}
+
+function umisti(h) {
+  const g = document.getElementById('figurka-' + h.pirat.id);
+  const [x, y] = BOD[h.pole];
+  g.setAttribute('transform', `translate(${(x + (h.posun||0)).toFixed(0)},${y.toFixed(0)})`);
+  g.classList.toggle('chycen', h.chycen);
+}
+
+function oznacAktivniho(kdo) {
+  const h = kdo || hraci[naTahu];
+  const k = document.getElementById('aktivni-krouzek');
+  const [x, y] = BOD[h.pole];
+  k.setAttribute('transform', `translate(${(x + (h.posun||0)).toFixed(0)},${y.toFixed(0)})`);
+  k.querySelector('circle').setAttribute('stroke', h.pirat.barva);
+}
+
+function vykresliPosadku() {
+  const box = document.getElementById('posadka');
+  box.innerHTML = hraci.map((h, i) => {
+    let stav = '';
+    if (h.dokoncil) stav = '🏆';
+    else if (h.chycen) stav = '🐙' + stav;
+    else if (h.stoji > 0) stav = '🌩️' + stav;
+    return `<div class="clen ${i === naTahu ? 'aktivni' : ''}">
+      <span class="tecka" style="background:${h.pirat.barva}"></span>
+      <span class="jm">${h.jmeno}</span>
+      <span class="stav">${stav}</span>
+    </div>`;
+  }).join('');
+}
+
+/* ---------- balíček a ruka ---------- */
+
+let balicek = [];
+
+function zamichejBalicek() {
+  balicek = [];
+  for (const id of Object.keys(KARTY)) for (let i = 0; i < 4; i++) balicek.push(id);
+  for (let i = balicek.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [balicek[i], balicek[j]] = [balicek[j], balicek[i]];
+  }
+}
+
+function liznKartu() {
+  if (!balicek.length) zamichejBalicek();
+  return balicek.pop();
+}
+
+/* Dá se ta karta teď použít? */
+/* Hodit lano jde jen tehdy, když kraken někoho drží — je to záchrana,
+   ne brzda. Jinak by se dalo krakena spoutávat pořád dokola. */
+function lzeHoditLano(h) {
+  return kraken.aktivni && hraci.some(x => !x.dokoncil && x.chycen);
+}
+
+/* Lano se obtočí krakenovi kolem chapadel: pustí všechny, koho drží,
+   a než se vymotá, přijde o kolo. */
+async function hodLano(kdo) {
+  prehraj('karta');
+  zatres();
+  await hlaska('🪢 Lano na krakena!', kdo);
+
+  const drzeni = hraci.filter(x => !x.dokoncil && x.chycen);
+  for (const x of drzeni) osvobod(x);
+  // Stejný důvod jako u meče: bez odsunu je kraken hned zpátky na nich.
+  kraken.pole = Math.max(0, kraken.pole - LANO_ODRAZ);
+  umistiKrakena();
+  postavFigurky();
+  vykresliPosadku();
+
+  if (LANO_SPOUTA) {
+    (window.__brzdy = window.__brzdy || { odstrceni: 0, omraceni: 0, spoutani: 0 }).spoutani++;
+    kraken.zastaven = true;
+    zatres();
+    await hlaska('🐙 Spoutaný! Pustil ' +
+                 (drzeni.length === 1 ? drzeni[0].koho : 'všechny') +
+                 ', couvl a kolo nepluje', kraken);
+  } else {
+    await hlaska('🐙 Kraken pustil ' +
+                 (drzeni.length === 1 ? drzeni[0].koho : 'všechny'), kraken);
+  }
+}
+
+/* Pirát došel k truhle. Na jednom místě, ať se to nekopíruje. */
+async function dokonci(h) {
+  h.dokoncil = true;
+  vykresliPosadku();
+  prehraj('poklad');
+  zablesknTruhlu();
+  await hlaska('🏆 ' + h.jmeno + ' u pokladu!', h);
+}
+
+/* Přitáhne nejzadnějšího o n polí a vyhodnotí, kam došel.
+   Vrací true, když se tím dostal do cíle. */
+async function pritahniLanem(kdo, n) {
+  if (kdo.chycen) {
+    osvobod(kdo);
+    vykresliPosadku();
+    await hlaska('🪢 Lano vytáhlo ' + kdo.koho + ' z chapadel!', kdo);
+  }
+  await posun(kdo, n, 260, true);
+  await vyhodnotPole(kdo);
+  postavFigurky();
+  if (kdo.pole >= POCET_POLI - 1) { await dokonci(kdo); return true; }
+  return false;
+}
+
+/* Hod lana jako celý tah: hráč se místo pohybu věnuje záchraně. */
+async function hodLanoJakoTah() {
+  if (bezi || !lzeHrat) return;
+  const h = hraci[naTahu];
+  if (!lzeHoditLano(h)) return;
+  lzeHrat = false; bezi = true; povolKostky(false);
+  odehranychTahu++;
+  await hodLano(h);
+  bezi = false;
+  if (!await koloDohrano()) dalsiHrac();
+}
+
+/* Hod lana zdarma: záchrana nestojí pohyb, hráč pak ještě hází. */
+async function hodLanoZdarma() {
+  if (bezi || !lzeHrat) return;
+  const h = hraci[naTahu];
+  if (!lzeHoditLano(h)) return;
+  bezi = true; povolKostky(false);
+  await hodLano(h);
+  bezi = false;
+  vykresliPosadku();
+  naRade();
+}
+
+/* Jak daleko je kraken za pirátem. Záporné číslo = už ho minul. */
+function odstupOdKrakena(h) { return h.pole - kraken.pole; }
+
+function lzePouzit(id, h) {
+  // Meč umí obojí: prosekat chapadla (i ta, co drží jeho vlastníka)
+  // a sekout po krakenovi, když je na dosah.
+  if (id === 'mec')   return hraci.some(x => !x.dokoncil && x.chycen) ||
+                             (kraken.aktivni && !h.chycen &&
+                              odstupOdKrakena(h) >= 0 && odstupOdKrakena(h) <= MEC_DOSAH);
+  // Rum má koho zachraňovat, jen když někdo vězí v bažině. Dřív byl
+  // použitelný v 98 % tahů, čili to nebylo rozhodnutí, ale samozřejmost.
+  if (id === 'rum')   return hraci.some(x => !x.dokoncil && x.stoji > 0);
+  // Sud se pokládá na cestu, ne hází po krakenovi. Nemá smysl klást
+  // ho tam, kde už kraken přeplul.
+  if (id === 'sud')   return !h.chycen && !h.dokoncil &&
+                             !sudy.includes(h.pole) && h.pole > kraken.pole;
+  if (id === 'pistole') return kraken.aktivni;
+  return false;
+}
+
+function vykresliRuku() {
+  const box = document.getElementById('ruka');
+  const h = hraci[naTahu];
+  const boj = document.getElementById('volba-boj');
+  const utek = document.getElementById('volba-utek');
+  if (!h) { box.innerHTML = ''; if (boj) boj.classList.add('spi'); return; }
+  if (boj) {
+    const lze = lzeHrat && h.karty.some(id => lzePouzit(id, h));
+    boj.classList.toggle('spi', !lze);
+    utek.classList.toggle('spi', !lzeHrat);
+  }
+  const karty = h.karty.map((id, i) => {
+    const k = KARTY[id];
+    const jde = lzeHrat && lzePouzit(id, h);
+    return `<button class="karta ${jde ? 'pouzitelna' : ''}" data-i="${i}" ${jde ? '' : 'disabled'}>
+      ${k.kresba}<span class="nazev">${k.jmeno}</span><span class="popis">${k.popis}</span>
+    </button>`;
+  });
+  while (karty.length < 3) karty.push('<div class="misto"></div>');
+  box.innerHTML = karty.join('');
+  box.querySelectorAll('.karta').forEach(b => {
+    b.onclick = () => zahrajKartu(+b.dataset.i);
+  });
+}
+
+/* Utíkáme, nebo bojujeme? Použití předmětu je celý tah – kdo bojuje,
+   ten se ten tah nehne. Jedno rozhodnutí za tah, které unese i čtyřletý. */
+async function zahrajKartu(i) {
+  if (bezi || !lzeHrat) return;
+  const h = hraci[naTahu];
+  const id = h.karty[i];
+  if (!id || !lzePouzit(id, h)) return;
+
+  lzeHrat = false;
+  bezi = true;
+  odehranychTahu++;
+  povolKostky(false);
+  h.karty.splice(i, 1);
+  vykresliRuku();
+  prehraj('karta');
+
+  if (id === 'mec') {
+    await prosekni(h);
+  } else if (id === 'rum') {
+    // Doušek rumu postaví na nohy toho, kdo vězí nejhlouběji vzadu.
+    const kdo = hraci.filter(x => !x.dokoncil && x.stoji > 0)
+                     .sort((a, b) => a.pole - b.pole)[0];
+    kdo.stoji = 0;
+    vykresliPosadku();
+    await hlaska('🍺 Rum postavil ' + kdo.koho + ' na nohy!', kdo);
+    await posun(kdo, RUM_KROKY, 120, true);
+    await vyhodnotPole(kdo);
+    if (kdo.pole >= POCET_POLI - 1) await dokonci(kdo);
+    postavFigurky();
+  } else if (id === 'sud') {
+    sudy.push(h.pole);
+    vykresliSudy();
+    prehraj('karta');
+    await hlaska('🧨 Sud prachu na cestě! Teď ho někdo trefte', h);
+  } else if (id === 'pistole') {
+    await mireniPistoli(h);
+  }
+
+  bezi = false;
+  vykresliPosadku();
+  if (!await koloDohrano()) dalsiHrac();
+}
+
+function naRade() {
+  const h = hraci[naTahu];
+  // Krátce a bez návodu – co se dělá, ví posádka po prvním kole.
+  document.getElementById('vyzva').innerHTML =
+    `Hraje <span class="kdo" style="background:${h.pirat.barva}">${h.jmeno}</span>` +
+    (h.dokoncil
+      ? '&nbsp;— táhne za lano'
+      : h.chycen
+        ? '&nbsp;— v chapadlech!'
+        : '&nbsp;— pomůžeš kartou, nebo běžíš?');
+  const obr = document.getElementById('pirat-karta');
+  obr.src = h.pirat.obrazek;
+  obr.alt = h.pirat.jmeno;
+  oznacAktivniho();
+  vykresliPosadku();
+  lzeHrat = true;
+  vykresliRuku();
+  povolKostky(true);
+}
+
+async function dalsiHrac() {
+  lzeHrat = false;
+  povolKostky(false);
+  vykresliRuku();
+  if (hraci.every(h => h.dokoncil)) { finale(); return; }
+  // Kdo dopluje, zůstává v kole jako pomocník v zátoce.
+  naTahu = (naTahu + 1) % hraci.length;
+
+  const h = hraci[naTahu];
+
+  // Kdo stojí v bouři, o tah přijde.
+  if (h.stoji > 0) {
+    h.stoji--;
+    oznacAktivniho();
+    vykresliPosadku();
+    document.getElementById('vyzva').innerHTML =
+      `<span class="kdo" style="background:${h.pirat.barva}">${h.jmeno}</span>
+       &nbsp;vězí v bažině`;
+    await hlaska('🥾 ' + h.jmeno + ' se brodí z bažiny', h, 'brodi');
+    await pauza(150);
+    dalsiHrac();
+    return;
+  }
+  naRade();
+}
+
+function povolKostky(ano) {
+  document.querySelectorAll('.kostka').forEach(b => b.disabled = !ano);
+}
+
+/* ==========================================================================
+   5. POHYB
+   ========================================================================== */
+
+const pauza = ms => new Promise(r => setTimeout(r, ms));
+
+/* ---------- kraken, který pluje za posádkou ---------- */
+
+/* Osvobozený pirát se vytrhne a odskočí kus před krakena –
+   jinak by ho chapadla popadla hned v dalším kroku znovu. */
+function osvobod(h) {
+  h.chycen = false;
+  if (kraken.aktivni) h.pole = Math.min(Math.max(h.pole, kraken.pole + 1), POCET_POLI - 1);
+  umisti(h);
+  vykresliPosadku();
+}
+
+function umistiKrakena() {
+  const g = document.getElementById('kraken');
+  if (!g) return;
+  g.style.display = kraken.aktivni ? '' : 'none';
+  if (!kraken.aktivni) return;
+  const [x, y] = BOD[Math.min(kraken.pole, POCET_POLI - 1)];
+  g.setAttribute('transform', `translate(${x.toFixed(0)},${y.toFixed(0)})`);
+}
+
+/* Kraken se vynoří – ukážeme jeho kartu a postavíme token na start cesty. */
+async function objevKrakena() {
+  kraken.aktivni = true;
+  kraken.pole = 0;
+  umistiKrakena();
+  prehraj('kraken');
+  zatres();
+  ukaz('kraken-karta', true);
+  for (let i = 0; i < 3; i++) { zatres(); await pauza(190); }   // plocha se klepe
+  await pauza(3600);                                            // dost času na přečtení
+  ukaz('kraken-karta', false);
+}
+
+/* Kraken popluje o hozený počet polí. Vrací true, když tím hra skončila. */
+async function krakenPopluje(hod) {
+  const drziNekoho = hraci.some(x => x.chycen && !x.dokoncil);
+  const kroku = drziNekoho ? Math.max(1, Math.ceil(hod * KRAKEN_ZPOMALENI)) : hod;
+  if (kroku < hod) await hlaska('🐙 Kraken se pere s kořistí — popluje jen o ' + kroku, kraken);
+
+  for (let k = 0; k < kroku; k++) {
+    if (kraken.pole >= POCET_POLI - 1) break;
+    kraken.pole++;
+    umistiKrakena();
+    prehraj('krok', k);
+    await pauza(150);
+
+    // Položený sud je zároveň nášlapná mina: kdo na něj vleze, ten
+    // letí dozadu a dál už v tomhle kole nepopluje.
+    if (sudy.includes(kraken.pole)) { await vybuchMiny(kraken.pole); break; }
+
+    // Chytá vždy toho nejzadnějšího, koho dohonil.
+    const korist = hraci.filter(x => !x.dokoncil && !x.chycen && x.pole <= kraken.pole)
+                        .sort((a, b) => a.pole - b.pole)[0];
+    if (!korist) continue;
+
+    korist.chycen = true;
+    umisti(korist);
+    vykresliPosadku();
+    prehraj('kraken');
+    zatres();
+    await hlaska('🐙 Kraken chytil ' + korist.koho + '!', korist, 'chyceni');
+  }
+
+  if (kraken.pole >= POCET_POLI - 1) { prohra(); return true; }
+  return false;
+}
+
+function prohra() {
+  prehraj('kraken');
+  zatres();
+  document.getElementById('prohra-text').textContent =
+    'Kraken doplul k truhle dřív než my a stáhl poklad do hlubiny. Zkusíme to znovu?';
+  ukaz('prohra', true);
+}
+
+function ukazCislo(n, x, y) {
+  const t = document.getElementById('pocitadlo');
+  t.parentNode.appendChild(t);         // ať se počítadlo neschová za figurku
+  t.textContent = n;
+  t.setAttribute('x', x.toFixed(0));
+  t.setAttribute('y', (y - 44).toFixed(0));
+  t.classList.remove('bliknuti');
+  void t.getBoundingClientRect();
+  t.classList.add('bliknuti');
+}
+
+/* Hláška v bublině nad figurkou. */
+/* Co už hráč jednou viděl, nemusí číst celé znovu. Efekty, které se
+   za partii opakují, dostanou klíč a podruhé se zobrazí jen krátce. */
+const videneEfekty = new Set();
+
+async function hlaska(text, h, klic) {
+  const g = document.getElementById('hlaska');
+  g.parentNode.appendChild(g);         // tah() si zvedá figurku navrch, bublina musí výš
+  const t = document.getElementById('hlaska-text');
+  const r = document.getElementById('hlaska-ram');
+  const [x, y] = BOD[h.pole];
+  const nahoru = y > 250;              // u horního okraje dáme bublinu pod figurku
+  g.classList.remove('videt');
+  t.textContent = text;
+  t.setAttribute('x', x);
+  t.setAttribute('y', nahoru ? y - 100 : y + 136);
+
+  // skutečné rozměry textu, ať bublina nikdy neuřízne emoji ani písmeno
+  const bb = t.getBBox();
+  const polSirky = bb.width / 2 + 24;
+  const stred = Math.min(Math.max(x, 70 + polSirky), W - 70 - polSirky);
+  t.setAttribute('x', stred);
+  r.setAttribute('x', stred - polSirky);
+  r.setAttribute('y', bb.y - 14);
+  r.setAttribute('width', polSirky * 2);
+  r.setAttribute('height', bb.height + 28);
+  void g.getBoundingClientRect();
+  g.classList.add('videt');
+  let doba = cteciCas(text);
+  if (klic) {
+    if (videneEfekty.has(klic)) doba = Math.min(doba, 1100);
+    else videneEfekty.add(klic);
+  }
+  await pauza(doba);
+  g.classList.remove('videt');
+  await pauza(120);
+}
+
+/* Jak dlouho nechat text na obrazovce. Krátká hláška zmizí dřív,
+   dlouhá počká — děti čtou pomalu, radši o chlup víc. */
+function cteciCas(text) {
+  return Math.min(3400, 1000 + text.length * 60);
+}
+
+/* ---------- provaz ----------
+   Posádka je svázaná lanem: nikdo se nesmí dostat víc než LANO polí před
+   toho nejzadnějšího. Kroky, na které kvůli tomu nedojde, se neztratí —
+   pošlou se nejzadnějšímu kamarádovi. Samotný přesun řeší tah(), aby se
+   posun() nevolal sám přes sebe (zkratka uvnitř vyhodnotPole). */
+const LANO = 6;
+let vLane = false;             // brzda proti zacyklení přenosů po laně
+
+/* Kam nejdál smí hráč dojet, aby se lano nenapnulo. */
+function meznik(h) {
+  const ostatni = hraci.filter(x => x !== h && !x.dokoncil);
+  if (!ostatni.length) return POCET_POLI - 1;
+  return Math.min(POCET_POLI - 1, Math.min(...ostatni.map(x => x.pole)) + LANO);
+}
+
+/* Nejzadnější kamarád, kterého lano přitáhne. Chyceného nevynecháváme —
+   dřív se stávalo, že kraken držel posledního a posádka od truhly neměla
+   koho táhnout, takže mu nikdo nepomohl. Lano ho z chapadel vytáhne. */
+function nejzadnejsi(krome) {
+  return hraci.filter(x => x !== krome && !x.dokoncil)
+              .sort((a, b) => a.pole - b.pole)[0];
+}
+
+/* Posun o n polí vpřed (bez vyhodnocení pole).
+   Vrací počet kroků, na které nedošlo kvůli lanu. */
+async function posun(h, n, rychlost = 170, bezLana = false) {
+  const cap = bezLana ? POCET_POLI - 1 : meznik(h);
+  let k = 0;
+  for (; k < n; k++) {
+    if (h.pole >= POCET_POLI - 1) break;
+    if (h.pole >= cap) return n - k;          // lano se napjalo
+    h.pole++;
+    umisti(h);
+    oznacAktivniho(h);
+    poskoc(h);
+    prehraj('krok', k + 1);
+    const [x, y] = BOD[h.pole];
+    if (rychlost >= 200) ukazCislo(k + 1, x, y);
+    await pauza(rychlost);
+  }
+  return 0;
+}
+
+/* Co se stane na políčku, kde hráč skončil. */
+async function vyhodnotPole(h, hloubka = 0) {
+  if (h.pole >= POCET_POLI - 1 || hloubka > 4) return;
+  const typ = POLE[h.pole] || 'w';
+
+  if (typ === 'y') {                       // item
+    if (h.karty.length >= 3) {
+      await hlaska('🎁 Ruka je plná', h);
+    } else {
+      const id = liznKartu();
+      h.karty.push(id);
+      vykresliRuku();
+      prehraj('karta');
+      await hlaska(`🎁 ${rod(h, 'Našel', 'Našla')} jsi: ${KARTY[id].jmeno}`, h, 'item');
+    }
+    return;
+  }
+
+  if (typ === 'b') {                       // bažina – stojíš kolo
+    h.stoji = 1;
+    vykresliPosadku();
+    prehraj('boure');
+    await hlaska('🥾 Uvízl jsi v bažině — stojíš kolo', h, 'bazina');
+    return;
+  }
+
+  if (typ === 'r') {                       // salva – odstrčí i omráčí
+    await vystrel(h, { karta: true, omraci: SALVA_OMRACI });
+    return;
+  }
+
+  if (typ === 'p') {                       // chapadla posilují krakena
+    await chapadlo(h);
+    return;
+  }
+
+  if (typ === 'c') {                       // tajná stezka
+    const cil = (ZKRATKY.find(([z]) => z === h.pole) || [])[1];
+    if (cil != null) {
+      prehraj('proud');
+      await hlaska('🌿 Tajná stezka džunglí!', h, 'zkratka');
+      // Zkratka podléhá lanu jako každý jiný pohyb; co se nevejde,
+      // dostane nejzadnější kamarád. Bez toho by se dal provaz obejít.
+      const zbylo = await posun(h, cil - h.pole, 80);
+      if (zbylo > 0 && !vLane) {
+        const kamarad = nejzadnejsi(h);
+        if (kamarad) { vLane = true; await pritahniLanem(kamarad, zbylo); vLane = false; }
+      }
+      await vyhodnotPole(h, hloubka + 1);
+    }
+    return;
+  }
+}
+
+/* ---------- efekty ke kartám ----------
+   Každý předmět musí být vidět, ne jen přečíst. */
+
+/* Sek mečem: bílý šleh přes plochu v místě zásahu. */
+async function seknuti(pole) {
+  const g = document.getElementById('efekty');
+  g.parentNode.appendChild(g);
+  const [x, y] = BOD[pole];
+  g.innerHTML = `<g class="sek" transform="translate(${x.toFixed(0)},${y.toFixed(0)})">
+    <path d="M -150 110 L 150 -110" stroke="#FFFFFF" stroke-width="20"
+          stroke-linecap="round" fill="none" opacity="0.9"/>
+    <path d="M -150 110 L 150 -110" stroke="#9FE7FF" stroke-width="7"
+          stroke-linecap="round" fill="none"/>
+  </g>`;
+  await pauza(380);
+  g.innerHTML = '';
+}
+
+/* Výbuch sudu: rozpínající se koule ohně. */
+async function vybuchEfekt(pole) {
+  const g = document.getElementById('efekty');
+  g.parentNode.appendChild(g);
+  const [x, y] = BOD[pole];
+  g.innerHTML = `<g class="bum" transform="translate(${x.toFixed(0)},${y.toFixed(0)})">
+    <circle r="105" fill="#B04A31" opacity="0.35"/>
+    <circle r="68" fill="#F2A03C" opacity="0.75"/>
+    <circle r="34" fill="#FFE9A0"/>
+  </g>`;
+  await pauza(500);
+  g.innerHTML = '';
+}
+
+/* Výbuch krakena pustí – tlaková vlna mu vytrhne kořist z chapadel. */
+async function vybuchOsvobodi() {
+  const drzeni = hraci.filter(x => !x.dokoncil && x.chycen);
+  if (!drzeni.length) return;
+  drzeni.forEach(osvobod);
+  postavFigurky();
+  vykresliPosadku();
+  await hlaska('⛓️ Tlaková vlna vytrhla ' +
+               drzeni.map(x => x.koho).join(' a ') + ' z chapadel!', drzeni[0]);
+}
+
+/* Nechá hráče kliknout na mapu, kam chce vystřelit. Vrací vybraný cíl. */
+function vyberCilMysi(cile) {
+  return new Promise(hotovo => {
+    // Měřicí robot nemá myš – vybere si sám, když je nastavený.
+    if (window.__autoCil) { hotovo(window.__autoCil(cile)); return; }
+    const g = document.getElementById('terce');
+    g.parentNode.appendChild(g);
+    // Kraken a jím držený pirát můžou stát na stejném poli – terče
+    // by se překryly a nešlo by si vybrat. Rozestoupíme je.
+    const naPoli = {};
+    cile.forEach(c => { (naPoli[c.pole] ||= []).push(c); });
+    g.innerHTML = cile.map((c, i) => {
+      const parta = naPoli[c.pole];
+      const posun = parta.length > 1
+        ? (parta.indexOf(c) - (parta.length - 1) / 2) * 46 : 0;
+      const [x, y] = BOD[c.pole];
+      return `<g class="terc" data-i="${i}" transform="translate(${(x + posun).toFixed(0)},${y.toFixed(0)})">
+        <circle r="34" fill="#B04A3155" stroke="#F2A03C" stroke-width="6"/>
+        <path d="M -16 0 L 16 0 M 0 -16 L 0 16" stroke="#FFF3D6" stroke-width="5"
+              stroke-linecap="round"/>
+      </g>`;
+    }).join('');
+    g.querySelectorAll('.terc').forEach(t => {
+      t.onclick = () => { g.innerHTML = ''; hotovo(cile[+t.dataset.i]); };
+    });
+  });
+}
+
+/* Na co pistole vystřelí? Když je cílů víc, hráč si klikne přímo na mapě.
+   Je to jedno z mála míst, kde skutečně rozhoduje. Když dává smysl jen
+   jedna věc, neotravujeme a střelí se rovnou. */
+async function mireniPistoli(kdo) {
+  const sudVDosahu = sudy.find(p => kraken.aktivni &&
+                                    p - kraken.pole >= 0 && p - kraken.pole <= SUD_DOSAH);
+  const drzeny = hraci.filter(x => x !== kdo && !x.dokoncil && x.chycen)
+                      .sort((a, b) => a.pole - b.pole)[0];
+
+  const cile = [];
+  if (sudVDosahu != null) cile.push({ co: 'sud', pole: sudVDosahu });
+  if (drzeny)             cile.push({ co: 'osvobodit', pole: drzeny.pole });
+  if (kraken.aktivni)     cile.push({ co: 'kraken', pole: kraken.pole });
+  if (!cile.length) { await vystrel(kdo); return; }
+
+  let cil = cile[0];
+  if (cile.length > 1) {
+    document.getElementById('vyzva').innerHTML =
+      '🎯 <b>' + kdo.jmeno + '</b> míří — klikni na mapě, na co střílíš';
+    cil = await vyberCilMysi(cile);
+  }
+
+  if (cil.co === 'sud') await odpalSud(kdo, cil.pole);
+  else if (cil.co === 'osvobodit') await vystrel(kdo, { osvobodi: true });
+  else await vystrel(kdo);
+}
+
+/* Kraken vlezl na položený sud. Past sklapne sama — bez pistole,
+   bez cizího tahu. Odhodí ho zpátky a zbytek kola už nepluje. */
+async function vybuchMiny(pole) {
+  sudy = sudy.filter(p => p !== pole);
+  vykresliSudy();
+  const g = document.getElementById('kraken');
+  prehraj('salva');
+  g.classList.add('zasah');
+  prehraj('kraken');
+  zatres();
+  await vybuchEfekt(pole);
+  g.classList.remove('zasah');
+  kraken.pole = Math.max(0, kraken.pole - MINA_ODRAZ);
+  umistiKrakena();
+  window.__brzdy = window.__brzdy || {};
+  window.__brzdy.miny = (window.__brzdy.miny || 0) + 1;
+  // Bez osvobozování – domluvený výstřel musí být znatelně lepší
+  // než to, že kraken na sud sám šlápne.
+  await hlaska('💥 Kraken šlápl na sud! Couvl o ' + MINA_ODRAZ, kraken);
+}
+
+/* Střelec trefí položený sud přes celou mapu. Koule letí od něj k sudu,
+   sud vybuchne a odhodí krakena. Vyžaduje dva hráče ve shodě — jeden
+   sud položí, druhý ho odpálí ve správnou chvíli. */
+async function odpalSud(kdo, pole) {
+  const svg = document.querySelector('#plocha svg');
+  const koule = document.getElementById('koule');
+  const draha = document.getElementById('draha');
+  const [ax, ay] = BOD[kdo.pole], [bx, by] = BOD[pole];
+
+  prehraj('salva');
+  await hlaska('🎯 Míří na sud!', kdo);
+  svg.appendChild(draha); svg.appendChild(koule);
+  draha.setAttribute('x1', ax.toFixed(0)); draha.setAttribute('y1', ay.toFixed(0));
+  draha.setAttribute('x2', bx.toFixed(0)); draha.setAttribute('y2', by.toFixed(0));
+  draha.setAttribute('opacity', '0.75');
+  koule.style.display = '';
+  await letKoule(koule, [ax, ay], [bx, by]);
+  koule.style.display = 'none';
+  draha.setAttribute('opacity', '0');
+
+  sudy = sudy.filter(p => p !== pole);
+  vykresliSudy();
+  const g = document.getElementById('kraken');
+  g.classList.add('zasah');
+  prehraj('kraken');
+  zatres();
+  await vybuchEfekt(pole);
+  g.classList.remove('zasah');
+
+  kraken.pole = Math.max(0, kraken.pole - SUD_ODRAZ);
+  umistiKrakena();
+  window.__brzdy = window.__brzdy || {};
+  window.__brzdy.sudy = (window.__brzdy.sudy || 0) + 1;
+  await hlaska('💥 VÝBUCH! Kraken couvl o ' + SUD_ODRAZ, kraken);
+  await vybuchOsvobodi();
+}
+
+
+/* Meč prosekne chapadla. Pirát doběhne ke kamarádovi, sekne, kamaráda
+   to odhodí kus dopředu — a zachránce se vrátí na své pole. Sám sobě
+   pomůže taky, na rozdíl od pistole. Kraken se z toho sbírá celé kolo,
+   aby měli šanci utéct. */
+async function prosekni(kdo) {
+  const drzeny = kdo.chycen ? kdo
+    : hraci.filter(x => x.chycen && !x.dokoncil).sort((a, b) => a.pole - b.pole)[0];
+
+  // Chapadla mají přednost: koho drží, ten se proseká ven.
+  if (drzeny) {
+    const g = document.getElementById('figurka-' + kdo.pirat.id);
+    g.parentNode.appendChild(g);
+    const doma = BOD[kdo.pole];
+    prehraj('salva');
+    if (drzeny !== kdo) await letKoule(g, doma, BOD[drzeny.pole], 260);  // doběhne
+    zatres();
+    await seknuti(drzeny.pole);
+    await hlaska('⚔️ Meč prosekl chapadla!', drzeny);
+    osvobod(drzeny);
+    await posun(drzeny, MEC_ODSUN, 120, true);                           // sek ho odhodí
+    if (drzeny !== kdo) await letKoule(g, BOD[drzeny.pole], doma, 260);  // a zpátky
+    umisti(kdo);
+    postavFigurky();
+    vykresliPosadku();
+  }
+
+  // A když je kraken na dosah, dostane přes chapadla taky.
+  if (kraken.aktivni && odstupOdKrakena(kdo) >= 0 &&
+      odstupOdKrakena(kdo) <= MEC_DOSAH) {
+    const g = document.getElementById('kraken');
+    prehraj('salva');
+    g.classList.add('zasah');
+    zatres();
+    await seknuti(kraken.pole);
+    if (!drzeny) await hlaska('⚔️ Sek mečem!', kdo);
+    g.classList.remove('zasah');
+    kraken.pole = Math.max(0, kraken.pole - MEC_ODRAZ);
+    umistiKrakena();
+    await hlaska('🐙 Couvl o ' + MEC_ODRAZ + ' pole!', kraken);
+  }
+}
+
+/* Sudy na ploše: soudek s lebkou, ať je na první pohled jasné, že
+   tam něco čeká na jiskru. */
+function vykresliSudy() {
+  const g = document.getElementById('sudy');
+  if (!g) return;
+  g.innerHTML = sudy.map(i => {
+    const [x, y] = BOD[i];
+    return `<g transform="translate(${x.toFixed(0)},${(y - 8).toFixed(0)}) scale(0.66)" class="sud-na-poli">
+      <path d="M -22 -26 L 22 -26 C 30 -6 32 10 32 22 C 32 38 18 46 0 46
+               C -18 46 -32 38 -32 22 C -32 10 -30 -6 -22 -26 Z"
+            fill="#8A5C33" stroke="#2A1840" stroke-width="7" stroke-linejoin="round"/>
+      <path d="M -31 -4 L 31 -4 M -32 20 L 32 20" stroke="#2A1840" stroke-width="7"/>
+      <g fill="#F5E7BE">
+        <circle cx="0" cy="6" r="13"/>
+        <path d="M -11 12 L 11 12 L 8 24 L -8 24 Z"/>
+      </g>
+      <g fill="#2A1840">
+        <circle cx="-5" cy="4" r="4"/><circle cx="5" cy="4" r="4"/>
+      </g>
+    </g>`;
+  }).join('');
+}
+
+/* Posune prvek po přímce z A do B a dopočítá polohu sám.
+   CSS přechod na SVG atributu `transform` se nespouštěl spolehlivě –
+   koule místo letu rovnou skočila na krakena. Pojistka `pauza` hlídá,
+   aby hra nezamrzla, když prohlížeč snímky nekreslí (skrytá záložka). */
+function letKoule(el, [ax, ay], [bx, by], doba = 400) {
+  const zacatek = performance.now();
+  const let_ = new Promise(hotovo => {
+    const krok = ted => {
+      // Rovnoměrně. Zrychlující křivka vypadala jako by koule vůbec
+      // neletěla – půlku času stála u piráta a pak mrkla ke krakenovi.
+      const t = Math.min(1, (ted - zacatek) / doba);
+      el.setAttribute('transform',
+        `translate(${(ax + (bx - ax) * t).toFixed(1)},${(ay + (by - ay) * t).toFixed(1)})`);
+      if (t < 1) requestAnimationFrame(krok); else hotovo();
+    };
+    requestAnimationFrame(krok);
+  });
+  return Promise.race([let_, pauza(doba + 400)]);
+}
+
+/* Výstřel na krakena – koule letí od figurky, kraken zčervená a couvne.
+   Salvové pole navíc krakena omráčí, takže vynechá příští tah.
+   Pistole z ruky ho jen odstrčí. */
+async function vystrel(kdo, { karta = false, omraci = false, osvobodi = false } = {}) {
+  // `karta` = výstřel z červeného salvového pole, ne z pistole v ruce.
+  const jeSalva = karta;
+  if (karta) {
+    prehraj('karta');
+    ukaz('salva-karta', true);
+    await pauza(1300);
+    ukaz('salva-karta', false);
+  }
+  if (!kraken.aktivni) {
+    await hlaska('💥 Rána do prázdna — kraken tu ještě není', kdo);
+    return;
+  }
+  const svg = document.querySelector('#plocha svg');
+  const koule = document.getElementById('koule');
+  const [ax, ay] = BOD[kdo.pole];
+  const [bx, by] = BOD[Math.min(kraken.pole, POCET_POLI - 1)];
+  prehraj('salva');
+  await hlaska(jeSalva ? '💥 SALVA na krakena!' : '💥 Rána z pistole!', kdo);
+
+  const draha = document.getElementById('draha');
+  svg.appendChild(draha);
+  svg.appendChild(koule);                // koule musí letět nad figurkami
+  draha.setAttribute('x1', ax.toFixed(0)); draha.setAttribute('y1', ay.toFixed(0));
+  draha.setAttribute('x2', bx.toFixed(0)); draha.setAttribute('y2', by.toFixed(0));
+  draha.setAttribute('opacity', '0.75');
+  koule.style.display = '';
+  await letKoule(koule, [ax, ay], [bx, by]);
+  koule.style.display = 'none';
+  draha.setAttribute('opacity', '0');
+
+  const g = document.getElementById('kraken');
+  g.classList.add('zasah');
+  prehraj('kraken');
+  zatres();
+  await pauza(300);
+  g.classList.remove('zasah');
+
+  window.__brzdy = window.__brzdy || { odstrceni: 0, omraceni: 0, spoutani: 0 };
+  window.__brzdy.odstrceni++;
+  if (kraken.pole > 0) { kraken.pole--; umistiKrakena(); }
+  if (!omraci) { umistiKrakena(); } else await hlaska('🐙 Zásah! Kraken couvl', kraken);
+
+  // Pistole na dálku vytrhne kamaráda z chapadel – sebe si však nezachrání.
+  if (osvobodi) {
+    const drzeny = hraci.filter(x => x !== kdo && !x.dokoncil && x.chycen)
+                        .sort((a, b) => a.pole - b.pole)[0];
+    if (drzeny) {
+      osvobod(drzeny);
+      postavFigurky();
+      vykresliPosadku();
+      await hlaska('💥 Kulka utrhla chapadlo — ' + drzeny.jmeno +
+                   rod(drzeny, ' je volný!', ' je volná!'), drzeny);
+    }
+  }
+
+  if (omraci) {
+    window.__brzdy.omraceni++;
+    kraken.zastaven = true;
+    await hlaska('🐙 Kraken je omráčený — příští tah nepluje', kraken);
+  }
+}
+
+/* Fialové pole u laguny: vystřelí chapadlo přes půl plochy, omotá se
+   pirátovi kolem nohou a **stáhne ho až ke krakenovi**, kde ho drží.
+   Síla se škáluje sama: kdo je daleko vpředu, spadne hlouběji — a protože
+   posádku drží lano, zabrzdí to celou partu. Chycení už není trest,
+   protože ven pomůže lano, meč i pistole. */
+async function chapadlo(kdo) {
+  prehraj('kraken');
+  zatres();
+
+  if (!kraken.aktivni) {
+    // Kraken ještě nevyplul, tak jen škubne dozadu.
+    kdo.pole = Math.max(0, kdo.pole - CHAPADLO_ZPET);
+    umisti(kdo);
+    postavFigurky();
+    await hlaska('🐙 CHAPADLO strhlo ' + kdo.koho + ' zpátky!', kdo, 'chapadlo');
+    return;
+  }
+
+  const odkud = kdo.pole;
+  // Chapadlo si přitáhne obojí k sobě: krakena dopředu, piráta k němu.
+  // Samotné stahování piráta hru jen prodlužovalo – krakenovi nepomohlo.
+  kraken.pole = Math.min(POCET_POLI - 1, kraken.pole + CHAPADLO_VPRED);
+  umistiKrakena();
+  kdo.pole = Math.max(0, Math.min(kdo.pole, kraken.pole));
+  kdo.chycen = true;
+  umisti(kdo);
+  postavFigurky();
+  vykresliPosadku();
+  zatres();
+  await hlaska(odkud - kdo.pole >= 3
+    ? '🐙 CHAPADLO stáhlo ' + kdo.koho + ' o ' + (odkud - kdo.pole) + ' polí ke krakenovi!'
+    : '🐙 CHAPADLO popadlo ' + kdo.koho + '!', kdo, 'chapadlo');
+}
+
+async function tah(hod) {
+  if (bezi || !lzeHrat) return;      // mimo svůj okamžik se hrát nedá
+  lzeHrat = false;
+  bezi = true;
+  povolKostky(false);
+
+
+  const h = hraci[naTahu];
+  let hrac = h;
+
+  // Koho drží kraken, ten se místo pohybu pokouší vykroutit.
+  if (h.chycen) {
+    odehranychTahu++;
+    if (hod >= VYKROUCENI_OD) {
+      osvobod(h);
+      prehraj('zachrana');
+      await hlaska(`💪 ${rod(h, 'Vykroutil', 'Vykroutila')} ses z chapadel!`, h);
+    } else {
+      await hlaska('🐙 ' + h.jmeno + ' je pořád v chapadlech', h);
+    }
+    bezi = false;
+    if (!await koloDohrano()) dalsiHrac();
+    return;
+  }
+
+  // Kdo je u truhly, nikam nejde – opře se do lana a táhne kamaráda k sobě.
+  if (h.dokoncil) {
+    odehranychTahu++;
+    const kdo = POKLAD_TAHNE ? nejzadnejsi(h) : null;
+    if (kdo) {
+      await pritahniLanem(kdo, hod);
+    } else if (hod >= 5) {
+      await vystrel(h);
+    } else {
+      await hlaska('💣 ' + h.jmeno + ' nabíjí kanón…', h);
+    }
+    bezi = false;
+    if (!await koloDohrano()) dalsiHrac();
+    return;
+  }
+
+  odehranychTahu++;
+  const g = document.getElementById('figurka-' + hrac.pirat.id);
+  g.parentNode.appendChild(g);          // pohybující se figurka navrch
+  hrac.posun = 0;
+  vykresliRuku();
+
+  const zbytekLana = await posun(hrac, hod);
+  await vyhodnotPole(hrac);
+
+  // Lano se napjalo – zbylé kroky dostane nejzadnější kamarád.
+  if (zbytekLana > 0) {
+    const kdo = nejzadnejsi(hrac);
+    if (kdo) {
+      // Bez bubliny: napnuté lano a rozjetý kamarád mluví za sebe.
+      await pritahniLanem(kdo, zbytekLana);
+    }
+  }
+
+  // Do cíle se dá dojet i bonusem z pole, proto se ptáme až tady.
+  if (hrac.pole >= POCET_POLI - 1) {
+    hrac.dokoncil = true;
+    vykresliPosadku();
+    prehraj('poklad');
+    zablesknTruhlu();
+    document.getElementById('vyzva').textContent = `${hrac.jmeno} je u pokladu! 🎉`;
+    await hlaska('🏆 ' + hrac.jmeno + ' u pokladu!', hrac);
+  }
+
+  postavFigurky();
+  bezi = false;
+  if (await koloDohrano()) return;
+
+  dalsiHrac();
+}
+
+/* Po každém dohraném kole se hlásí kraken. Vrací true, když převzal řízení. */
+async function koloDohrano() {
+  // Když je celá posádka u truhly, kraken už nehraje – jinak by mohl
+  // vyhrát v kole, ve kterém lano přitáhlo posledního piráta domů.
+  if (hraci.every(x => x.dokoncil)) return false;
+  if (odehranychTahu % hraci.length !== 0) return false;
+  if (!kraken.aktivni) {
+    if (odehranychTahu < hraci.length * KRAKEN_PO_KOLECH) return false;
+    await objevKrakena();
+  }
+  // Omráčený salvou stojí a vzpamatovává se.
+  if (kraken.zastaven) {
+    kraken.zastaven = false;
+    await hlaska('🐙 Kraken se vzpamatovává — tenhle tah nepluje', kraken);
+    return false;
+  }
+
+  // Kraken si hází sám.
+  document.getElementById('vyzva').innerHTML =
+    '<span class="kdo" style="background:#4A3A63">🐙 Kraken</span>&nbsp;si hází…';
+  await pauza(300);
+  let hod = zakladKrakena() + 1 + Math.floor(Math.random() * stenKrakena());
+  if (kraken.bonus) { hod += kraken.bonus; kraken.bonus = 0; }
+  await hlaska('🐙 Kraken hodil ' + hod, kraken, 'krakenHod');
+  if (await krakenPopluje(hod)) return true;
+
+  if (kraken.hodNavic) {                    // druhé chapadlo mu dalo hod navíc
+    kraken.hodNavic = false;
+    const znovu = zakladKrakena() + 1 + Math.floor(Math.random() * stenKrakena());
+    await hlaska('🐙 Kraken hází znovu: ' + znovu, kraken);
+    if (await krakenPopluje(znovu)) return true;
+  }
+  return false;
+}
+
+/* Velká otázka uprostřed obrazovky; vrací hodnotu zvolené možnosti. */
+function zeptejSe(nadpis, text, moznosti) {
+  return new Promise(hotovo => {
+    document.getElementById('otazka-nadpis').textContent = nadpis;
+    document.getElementById('otazka-text').textContent = text;
+    const box = document.getElementById('otazka-tlacitka');
+    box.innerHTML = '';
+    for (const m of moznosti) {
+      const b = document.createElement('button');
+      b.className = m.trida || '';
+      b.textContent = m.popis;
+      b.onclick = () => { ukaz('otazka', false); hotovo(m.hodnota); };
+      box.appendChild(b);
+    }
+    ukaz('otazka', true);
+  });
+}
+
+/* Zkratka pro ano/ne. */
+function otazka(nadpis, text, popisAno, popisNe) {
+  return zeptejSe(nadpis, text, [
+    { popis: popisAno, hodnota: true },
+    { popis: popisNe,  hodnota: false, trida: 'ne' }
+  ]);
+}
+
+function finale() {
+  document.getElementById('finale-text').textContent = hraci.length === 1
+    ? `${hraci[0].jmeno} ${rod(hraci[0], 'doplul', 'doplula')} k truhle za ${odehranychTahu} tahů. Jupíí!`
+    : `Dopluli jsme všichni: ${hraci.map(h => h.jmeno).join(', ')}.` +
+      ` Zvládli jsme to za ${odehranychTahu} tahů. Jupíí!`;
+  ukaz('finale', true);
+  konfety();
+  prehraj('finale');
+}
+
+/* ==========================================================================
+   6. TLAČÍTKA KOSTKY 1–6
+   ========================================================================== */
+
+const TECKY = {
+  1: [[50,50]],
+  2: [[28,28],[72,72]],
+  3: [[26,26],[50,50],[74,74]],
+  4: [[28,28],[72,28],[28,72],[72,72]],
+  5: [[28,28],[72,28],[50,50],[28,72],[72,72]],
+  6: [[28,26],[72,26],[28,50],[72,50],[28,74],[72,74]]
+};
+
+function vykresliKostky() {
+  const box = document.getElementById('kostky');
+  box.innerHTML = '';
+  for (let n = 1; n <= 6; n++) {
+    const b = document.createElement('button');
+    b.className = 'kostka';
+    b.setAttribute('aria-label', 'Padlo ' + n);
+    b.innerHTML = `<svg viewBox="0 0 100 100">` +
+      TECKY[n].map(([x,y]) => `<circle cx="${x}" cy="${y}" r="10"/>`).join('') + `</svg>`;
+    b.onclick = () => { prehraj('kostka'); tah(n); };
+    box.appendChild(b);
+  }
+}
+
+/* ==========================================================================
+   7. START
+   ========================================================================== */
+
+document.getElementById('zvukTlacitko').textContent = zvukZapnut ? '🔊' : '🔇';
+vykresliKdo();
+</script>
+</body>
+</html>
