@@ -92,7 +92,6 @@
 
   .figurka { transition: transform .22s cubic-bezier(.34,1.3,.64,1); }
   .figurka .chapadlo { display: none; }
-  .figurka.chycen .chapadlo { display: block; animation: sevreni 1.1s ease-in-out infinite; }
   @keyframes sevreni { 0%,100% { opacity: .85 } 50% { opacity: 1 } }
 
   /* houpání na vlnách */
@@ -473,20 +472,30 @@ const KOSTRA = [
 // Chapadla jsou rozprostřená po celé cestě, ne nahloučená u lagun —
 // dřív seděla na 19/21 a 34/35 a poslední třetina neměla čím krakena
 // brzdit. Salvové pole 35 dává posádce obranu i v závěru.
+// Pořadí ale drží obě laguny vepředu: 19 leží u levé, 34 u pravé, takže
+// i menší posádka má chapadlo u každé z nich a nesedí všechna pohromadě.
 const MISTA = {
-  p: [19, 22, 26, 30, 37],          // chapadla rozprostřená po cestě
-  r: [15, 23, 35, 38, 42],          // salva
-  y: [2, 6, 13, 21, 33, 40],        // item
+  p: [19, 34, 23, 22, 30],          // chapadla: 19 u levé laguny, 34 u pravé,
+                                    // 23 se vrátilo taky k levé — uprostřed
+                                    // cesty (26) nebylo u žádné vody
+  r: [15, 25, 31, 35, 38],          // salva; 25 uvolnilo 23 chapadlu.
+                                    // Páté salvové pole bývalo na 42, dvě pole
+                                    // před truhlou. Tam už o nic nešlo, a tak
+                                    // se přesunulo na 31 — samotné smazání
+                                    // srazilo úspěšnost na 76 %.
+  y: [2, 6, 13, 21, 33, 40, 27, 37],// item; 27 a 37 doplňují prázdný závěr cesty
   b: [17, 8, 28, 41, 36, 43]        // bažina, stojíš kolo; 8 = kdo minul první zkratku
 };
 
 // Obtížnost se ladí počtem barevných políček. Čtyři hráči mají nejtěžší mapu.
 // Naměřeno simulacemi, viz dokumentace/obtiznost.md.
+// Čtyřem hráčům přibyla dvě salvová a dvě itemová pole — posádka se musí
+// posílit, protože krakena zpomalovat nechceme.
 const OBTIZNOST = {
   1: { p: 0, r: 4, y: 6, b: 1 },
   2: { p: 1, r: 4, y: 6, b: 2 },
-  3: { p: 2, r: 5, y: 6, b: 2 },
-  4: { p: 5, r: 3, y: 6, b: 4 }
+  3: { p: 2, r: 4, y: 6, b: 2 },
+  4: { p: 3, r: 5, y: 8, b: 4 }
 };
 
 let POLE = {};
@@ -520,32 +529,35 @@ const KRAKEN_ZAKLAD = { 1: 0, 2: 0, 3: 0, 4: 0 };
 const KOSTKA_KRAKENA = { 1: 4, 2: 5, 3: 5, 4: 6 };
 function stenKrakena() { return KOSTKA_KRAKENA[Math.min(4, hraci.length)] || 6; }
 function zakladKrakena() { return KRAKEN_ZAKLAD[Math.min(4, hraci.length)] || 0; }
-let KRAKEN_ZPOMALENI = 1;      // 1 = kořist ho vůbec nebrzdí
-let VYKROUCENI_OD = 4;         // co musíš hodit, aby ses vykroutil sám
 /* Volba mezi kartou a během je vidět na obrazovce sama: buď hráč klikne
    na kartu, nebo na kostku. Zvláštní tlačítko „běžím" tu bylo, ale byl
    to jen klik navíc pro něco, co je zřejmé. */
-let LANO_SPOUTA = false;       // spoutá lano krakena, nebo jen osvobodí?
-let POKLAD_TAHNE = true;       // kdo je u pokladu, táhne za lano místo kanónu
 /* Zeštíhlení: dřív měl skoro každý prvek sílu 3 až 6 a k tomu omráčení.
    Efekty se navzájem rušily a hra se rozpadla na „procházka, nebo drama".
    Teď má všechno malý dopad a obtížnost se ladí jedinou pákou – kostkou
    krakena. Omráčení nezůstalo nikde: bere krakenovi tah, a to je to
    jediné, co ho z hry vyřadí úplně. */
 let SALVA_OMRACI = false;      // bere salvové pole krakenovi celý tah?
-let MEC_DOSAH = 2;             // na kolik polí meč dosáhne na krakena
-let MEC_ODSUN = 1;             // o kolik sek odhodí osvobozeného dopředu
-let MEC_ODRAZ = 2;             // o kolik sek odhodí krakena dozadu
-let LANO_ODRAZ = 1;            // o kolik odhodí krakena hod lana
+let MEC_PROSEK = 5;            // o kolik meč posune toho, kdo zaostal
+                               // Tři pole byla past: kdo mačetu zahraje,
+                               // přijde o vlastní hod, a ten dá průměrně 3,5.
+                               // Karta, která vypadá jako horší obchod než
+                               // kostka, se u stolu nezahraje. Změřeno, že
+                               // na výsledku nezáleží (3 → 81 %, 5 → 80 %,
+                               // ocas 11,7 vs 11,6), tak ať je aspoň vidět,
+                               // že se to vyplatí.
 let SUD_DOSAH = 4;             // na kolik polí se dá sud po krakenovi hodit
-let MINA_ODRAZ = 1;            // šlápnutí na sud je slabší než mířený výstřel
-let SUD_ODRAZ = 2;             // o kolik ho výbuch odhodí (navíc mu vezme
+let MINA_ODRAZ = 2;            // šlápnutí na sud je slabší než mířený výstřel
+let SUD_ODRAZ = 3;             // o kolik ho výbuch odhodí (navíc mu vezme
                                // zbytek kola, což samo o sobě váží dost)
 let RUM_KROKY = 1;             // o kolik posune rum celou posádku
-let CHAPADLO_ZPET = 2;         // o kolik chapadlo strhne piráta dozadu
-let CHAPADLO_VPRED = 5;        // o kolik se tím kraken přitáhne dopředu
-                               // (radši víc polí o síle 5 než jedno o síle 7)
-                               // (4 dá 87 %, 5 dá 80 %, 6 už 68 %)
+let KRAKEN_ODHOD = 2;          // o kolik polí za sebe kraken mrští piráta
+let CHAPADLO_BONUS = 3;        // o kolik víc kraken PŘÍŠTĚ hodí
+                               // Dřív se kraken přitáhl hned o tři pole. Skok
+                               // uprostřed kola se špatně chápe a v závěru cesty
+                               // hru zabíjel. Plus k příštímu hodu je stejně
+                               // silný, ale je vidět dopředu a posádka má ještě
+                               // kolo na to něco s tím udělat.
 
 // Zašlé barvy jako na staré mapě – syté odstíny působily na malované
 // ploše jako nalepené. Bílá je krémový pergamen, ne čistá běloba.
@@ -579,7 +591,7 @@ function rod(h, muzsky, zensky) { return h.rod === 'z' ? zensky : muzsky; }
 /* ---------- karty předmětů ---------- */
 const KARTY = {
   mec: {
-    jmeno: 'Meč', popis: 'Prosekne chapadla, i ta co drží tebe. Zblízka sekne krakena',
+    jmeno: 'Meč', popis: 'Prosekne džungli tomu, kdo zaostal — popojde o 5 polí',
     kresba: `<svg viewBox="0 0 100 100">
       <path d="M 16 84 C 34 76 62 52 84 18 C 62 26 34 52 20 76 Z" fill="#DDE4EA" stroke="#4E5A66" stroke-width="4" stroke-linejoin="round"/>
       <path d="M 22 74 C 40 56 64 34 80 24" fill="none" stroke="#FFFFFF" stroke-width="3" opacity=".8"/>
@@ -588,7 +600,7 @@ const KARTY = {
     </svg>`
   },
   rum: {
-    jmeno: 'Rum', popis: 'Vytáhne kamaráda z bažiny a postrčí ho dál',
+    jmeno: 'Rum', popis: 'Vytáhne z bažiny a celá posádka popojde o pole',
     kresba: `<svg viewBox="0 0 100 100">
       <rect x="40" y="10" width="20" height="20" rx="3" fill="#8A5C33" stroke="#3A2412" stroke-width="4"/>
       <path d="M 34 32 L 66 32 C 74 44 76 56 76 70 C 76 84 70 90 50 90 C 30 90 24 84 24 70 C 24 56 26 44 34 32 Z"
@@ -596,6 +608,18 @@ const KARTY = {
       <rect x="30" y="52" width="40" height="24" rx="3" fill="#F5E7BE" stroke="#3A2412" stroke-width="3"/>
       <text x="50" y="70" text-anchor="middle" font-size="17" font-weight="bold" fill="#3A2412"
             font-family="Verdana,sans-serif">RUM</text>
+    </svg>`
+  },
+  kotva: {
+    jmeno: 'Kotva', popis: 'Přitáhne nejzadnějšího kamaráda až k tobě',
+    kresba: `<svg viewBox="0 0 100 100">
+      <g fill="none" stroke="#6E7C88" stroke-width="9" stroke-linecap="round">
+        <circle cx="50" cy="20" r="10"/><path d="M 50 30 L 50 84"/><path d="M 28 44 L 72 44"/>
+        <path d="M 18 62 C 18 84 34 90 50 90 C 66 90 82 84 82 62"/>
+      </g>
+      <g fill="none" stroke="#B8C4CE" stroke-width="3.5" stroke-linecap="round">
+        <path d="M 50 34 L 50 80"/><path d="M 32 44 L 68 44"/>
+      </g>
     </svg>`
   },
   sud: {
@@ -617,7 +641,7 @@ const KARTY = {
     </svg>`
   },
   pistole: {
-    jmeno: 'Pistole', popis: 'Střelí krakena i sud přes celou mapu. Osvobodí kamaráda',
+    jmeno: 'Pistole', popis: 'Střelí krakena i sud přes celou mapu',
     kresba: `<svg viewBox="0 0 100 100">
       <!-- pažba: zahnutá, dřevěná, s mosazným kováním na patce -->
       <path d="M 30 46 L 50 44 C 46 60 38 76 29 87 C 23 93 13 90 13 82
@@ -964,7 +988,7 @@ function zablesknTruhlu() {
    4. STAV HRY
    ========================================================================== */
 
-let hraci = [];          // { jmeno, pirat, pole, posun, stoji, chycen, dokoncil, karty }
+let hraci = [];          // { jmeno, pirat, pole, posun, stoji, dokoncil, karty }
 let naTahu = 0;
 let bezi = false;        // právě běží animace tahu
 let lzeHrat = false;     // hra čeká na klik na kostku
@@ -1052,7 +1076,7 @@ function vyberPirata() {
     b.onclick = () => {
       if (vybirajici >= poradiVyberu.length) return;   // výběr už skončil
       hraci.push({ ...OSOBY[poradiVyberu[vybirajici]], pirat: p, pole: 0, posun: 0,
-                   stoji: 0, chycen: false, dokoncil: false,
+                   stoji: 0, dokoncil: false,
                    karty: [] });
       vybirajici++;
       vyberPirata();
@@ -1094,7 +1118,6 @@ function umisti(h) {
   const g = document.getElementById('figurka-' + h.pirat.id);
   const [x, y] = BOD[h.pole];
   g.setAttribute('transform', `translate(${(x + (h.posun||0)).toFixed(0)},${y.toFixed(0)})`);
-  g.classList.toggle('chycen', h.chycen);
 }
 
 function oznacAktivniho(kdo) {
@@ -1110,7 +1133,7 @@ function vykresliPosadku() {
   box.innerHTML = hraci.map((h, i) => {
     let stav = '';
     if (h.dokoncil) stav = '🏆';
-    else if (h.chycen) stav = '🐙' + stav;
+
     else if (h.stoji > 0) stav = '🌩️' + stav;
     return `<div class="clen ${i === naTahu ? 'aktivni' : ''}">
       <span class="tecka" style="background:${h.pirat.barva}"></span>
@@ -1139,103 +1162,20 @@ function liznKartu() {
 }
 
 /* Dá se ta karta teď použít? */
-/* Hodit lano jde jen tehdy, když kraken někoho drží — je to záchrana,
-   ne brzda. Jinak by se dalo krakena spoutávat pořád dokola. */
-function lzeHoditLano(h) {
-  return kraken.aktivni && hraci.some(x => !x.dokoncil && x.chycen);
-}
-
-/* Lano se obtočí krakenovi kolem chapadel: pustí všechny, koho drží,
-   a než se vymotá, přijde o kolo. */
-async function hodLano(kdo) {
-  prehraj('karta');
-  zatres();
-  await hlaska('🪢 Lano na krakena!', kdo);
-
-  const drzeni = hraci.filter(x => !x.dokoncil && x.chycen);
-  for (const x of drzeni) osvobod(x);
-  // Stejný důvod jako u meče: bez odsunu je kraken hned zpátky na nich.
-  kraken.pole = Math.max(0, kraken.pole - LANO_ODRAZ);
-  umistiKrakena();
-  postavFigurky();
-  vykresliPosadku();
-
-  if (LANO_SPOUTA) {
-    (window.__brzdy = window.__brzdy || { odstrceni: 0, omraceni: 0, spoutani: 0 }).spoutani++;
-    kraken.zastaven = true;
-    zatres();
-    await hlaska('🐙 Spoutaný! Pustil ' +
-                 (drzeni.length === 1 ? drzeni[0].koho : 'všechny') +
-                 ', couvl a kolo nepluje', kraken);
-  } else {
-    await hlaska('🐙 Kraken pustil ' +
-                 (drzeni.length === 1 ? drzeni[0].koho : 'všechny'), kraken);
-  }
-}
-
-/* Pirát došel k truhle. Na jednom místě, ať se to nekopíruje. */
-async function dokonci(h) {
-  h.dokoncil = true;
-  vykresliPosadku();
-  prehraj('poklad');
-  zablesknTruhlu();
-  await hlaska('🏆 ' + h.jmeno + ' u pokladu!', h);
-}
-
-/* Přitáhne nejzadnějšího o n polí a vyhodnotí, kam došel.
-   Vrací true, když se tím dostal do cíle. */
-async function pritahniLanem(kdo, n) {
-  if (kdo.chycen) {
-    osvobod(kdo);
-    vykresliPosadku();
-    await hlaska('🪢 Lano vytáhlo ' + kdo.koho + ' z chapadel!', kdo);
-  }
-  await posun(kdo, n, 260, true);
-  await vyhodnotPole(kdo);
-  postavFigurky();
-  if (kdo.pole >= POCET_POLI - 1) { await dokonci(kdo); return true; }
-  return false;
-}
-
-/* Hod lana jako celý tah: hráč se místo pohybu věnuje záchraně. */
-async function hodLanoJakoTah() {
-  if (bezi || !lzeHrat) return;
-  const h = hraci[naTahu];
-  if (!lzeHoditLano(h)) return;
-  lzeHrat = false; bezi = true; povolKostky(false);
-  odehranychTahu++;
-  await hodLano(h);
-  bezi = false;
-  if (!await koloDohrano()) dalsiHrac();
-}
-
-/* Hod lana zdarma: záchrana nestojí pohyb, hráč pak ještě hází. */
-async function hodLanoZdarma() {
-  if (bezi || !lzeHrat) return;
-  const h = hraci[naTahu];
-  if (!lzeHoditLano(h)) return;
-  bezi = true; povolKostky(false);
-  await hodLano(h);
-  bezi = false;
-  vykresliPosadku();
-  naRade();
-}
-
-/* Jak daleko je kraken za pirátem. Záporné číslo = už ho minul. */
-function odstupOdKrakena(h) { return h.pole - kraken.pole; }
-
 function lzePouzit(id, h) {
-  // Meč umí obojí: prosekat chapadla (i ta, co drží jeho vlastníka)
-  // a sekout po krakenovi, když je na dosah.
-  if (id === 'mec')   return hraci.some(x => !x.dokoncil && x.chycen) ||
-                             (kraken.aktivni && !h.chycen &&
-                              odstupOdKrakena(h) >= 0 && odstupOdKrakena(h) <= MEC_DOSAH);
-  // Rum má koho zachraňovat, jen když někdo vězí v bažině. Dřív byl
-  // použitelný v 98 % tahů, čili to nebylo rozhodnutí, ale samozřejmost.
-  if (id === 'rum')   return hraci.some(x => !x.dokoncil && x.stoji > 0);
+  // Meč není zbraň na krakena – od toho je pistole. Je to mačeta:
+  // proseká džungli tomu, kdo zaostal, a ten popojde.
+  if (id === 'mec')   return !h.dokoncil &&
+                             hraci.some(x => x !== h && !x.dokoncil && x.pole < h.pole);
+  if (id === 'rum')   return hraci.some(x => !x.dokoncil);
+  // Kotva je jediná karta mířená čistě na pomoc kamarádovi. Po zrušení
+  // lana je to jediné, čím jde vytáhnout toho, kdo zaostal.
+  // Kdo je u pokladu, kotvu házet nesmí – přitáhl by kamaráda rovnou do cíle.
+  if (id === 'kotva') return !h.dokoncil &&
+                             hraci.some(x => x !== h && !x.dokoncil && x.pole < h.pole);
   // Sud se pokládá na cestu, ne hází po krakenovi. Nemá smysl klást
   // ho tam, kde už kraken přeplul.
-  if (id === 'sud')   return !h.chycen && !h.dokoncil &&
+  if (id === 'sud')   return !h.dokoncil &&
                              !sudy.includes(h.pole) && h.pole > kraken.pole;
   if (id === 'pistole') return kraken.aktivni;
   return false;
@@ -1285,13 +1225,34 @@ async function zahrajKartu(i) {
   if (id === 'mec') {
     await prosekni(h);
   } else if (id === 'rum') {
-    // Doušek rumu postaví na nohy toho, kdo vězí nejhlouběji vzadu.
-    const kdo = hraci.filter(x => !x.dokoncil && x.stoji > 0)
-                     .sort((a, b) => a.pole - b.pole)[0];
-    kdo.stoji = 0;
+    // Doušek rumu vytáhne každého z bažiny a celá posádka popojde.
+    const zabahneni = hraci.filter(x => !x.dokoncil && x.stoji > 0);
+    zabahneni.forEach(x => { x.stoji = 0; });
     vykresliPosadku();
-    await hlaska('🍺 Rum postavil ' + kdo.koho + ' na nohy!', kdo);
-    await posun(kdo, RUM_KROKY, 120, true);
+    await hlaska(zabahneni.length
+      ? '🍺 Rum vytáhl ' + zabahneni.map(x => x.koho).join(' a ') + ' z bažiny!'
+      : '🍺 Rum pro celou posádku!', h, 'rum');
+    for (const x of hraci.filter(x => !x.dokoncil)) {
+      await posun(x, RUM_KROKY, 120);
+      await vyhodnotPole(x);
+      if (x.pole >= POCET_POLI - 1) await dokonci(x);
+    }
+    postavFigurky();
+  } else if (id === 'kotva') {
+    const kdo = hraci.filter(x => x !== h && !x.dokoncil && x.pole < h.pole)
+                     .sort((a, b) => a.pole - b.pole)[0];
+    prehraj('karta');
+    await hlaska('⚓ Kotva letí pro ' + kdo.koho + '!', h, 'kotva');
+    // Přitáhne ho rovnou k sobě – lano po zrušení chybí a tohle je
+    // jediné, čím jde opozdilce doopravdy dotáhnout k posádce.
+    const g = document.getElementById('figurka-' + kdo.pirat.id);
+    g.parentNode.appendChild(g);
+    const odkud = BOD[kdo.pole];
+    kdo.stoji = 0;
+    kdo.pole = h.pole;
+    await letKoule(g, odkud, BOD[kdo.pole], 420);
+    umisti(kdo);
+    postavFigurky();
     await vyhodnotPole(kdo);
     if (kdo.pole >= POCET_POLI - 1) await dokonci(kdo);
     postavFigurky();
@@ -1315,10 +1276,8 @@ function naRade() {
   document.getElementById('vyzva').innerHTML =
     `Hraje <span class="kdo" style="background:${h.pirat.barva}">${h.jmeno}</span>` +
     (h.dokoncil
-      ? '&nbsp;— táhne za lano'
-      : h.chycen
-        ? '&nbsp;— v chapadlech!'
-        : '&nbsp;— pomůžeš kartou, nebo běžíš?');
+      ? '&nbsp;— u děla!'
+      : '&nbsp;— pomůžeš kartou, nebo běžíš?');
   const obr = document.getElementById('pirat-karta');
   obr.src = h.pirat.obrazek;
   obr.alt = h.pirat.jmeno;
@@ -1369,12 +1328,6 @@ const pauza = ms => new Promise(r => setTimeout(r, ms));
 
 /* Osvobozený pirát se vytrhne a odskočí kus před krakena –
    jinak by ho chapadla popadla hned v dalším kroku znovu. */
-function osvobod(h) {
-  h.chycen = false;
-  if (kraken.aktivni) h.pole = Math.min(Math.max(h.pole, kraken.pole + 1), POCET_POLI - 1);
-  umisti(h);
-  vykresliPosadku();
-}
 
 function umistiKrakena() {
   const g = document.getElementById('kraken');
@@ -1383,6 +1336,23 @@ function umistiKrakena() {
   if (!kraken.aktivni) return;
   const [x, y] = BOD[Math.min(kraken.pole, POCET_POLI - 1)];
   g.setAttribute('transform', `translate(${x.toFixed(0)},${y.toFixed(0)})`);
+}
+
+/* Kraken popadne piráta chapadlem a mrští s ním dozadu. Bolí to stejně
+   jako dřívější držení, ale hráč o tah nepřijde. */
+async function odhodPirata(kdo) {
+  const g = document.getElementById('figurka-' + kdo.pirat.id);
+  g.parentNode.appendChild(g);
+  const odkud = BOD[kdo.pole];
+  prehraj('kraken');
+  zatres();
+  kdo.pole = Math.max(0, kraken.pole - KRAKEN_ODHOD);
+  await letKoule(g, odkud, BOD[kdo.pole], 420);   // pirát letí vzduchem
+  umisti(kdo);
+  postavFigurky();
+  vykresliPosadku();
+  zatres();
+  await hlaska('🐙 Kraken mrštil ' + kdo.koho + ' dozadu!', kdo, 'odhod');
 }
 
 /* Kraken se vynoří – ukážeme jeho kartu a postavíme token na start cesty. */
@@ -1400,11 +1370,7 @@ async function objevKrakena() {
 
 /* Kraken popluje o hozený počet polí. Vrací true, když tím hra skončila. */
 async function krakenPopluje(hod) {
-  const drziNekoho = hraci.some(x => x.chycen && !x.dokoncil);
-  const kroku = drziNekoho ? Math.max(1, Math.ceil(hod * KRAKEN_ZPOMALENI)) : hod;
-  if (kroku < hod) await hlaska('🐙 Kraken se pere s kořistí — popluje jen o ' + kroku, kraken);
-
-  for (let k = 0; k < kroku; k++) {
+  for (let k = 0; k < hod; k++) {
     if (kraken.pole >= POCET_POLI - 1) break;
     kraken.pole++;
     umistiKrakena();
@@ -1415,17 +1381,13 @@ async function krakenPopluje(hod) {
     // letí dozadu a dál už v tomhle kole nepopluje.
     if (sudy.includes(kraken.pole)) { await vybuchMiny(kraken.pole); break; }
 
-    // Chytá vždy toho nejzadnějšího, koho dohonil.
-    const korist = hraci.filter(x => !x.dokoncil && !x.chycen && x.pole <= kraken.pole)
+    // Koho dohoní, toho mrští dozadu. Nikdo se nezastaví – dítě hraje
+    // každý svůj tah, protože „stojíš a čekáš" je to nejhorší, co může
+    // čtyřletého u hry potkat.
+    const korist = hraci.filter(x => !x.dokoncil && x.pole <= kraken.pole)
                         .sort((a, b) => a.pole - b.pole)[0];
     if (!korist) continue;
-
-    korist.chycen = true;
-    umisti(korist);
-    vykresliPosadku();
-    prehraj('kraken');
-    zatres();
-    await hlaska('🐙 Kraken chytil ' + korist.koho + '!', korist, 'chyceni');
+    await odhodPirata(korist);
   }
 
   if (kraken.pole >= POCET_POLI - 1) { prohra(); return true; }
@@ -1495,37 +1457,10 @@ function cteciCas(text) {
   return Math.min(3400, 1000 + text.length * 60);
 }
 
-/* ---------- provaz ----------
-   Posádka je svázaná lanem: nikdo se nesmí dostat víc než LANO polí před
-   toho nejzadnějšího. Kroky, na které kvůli tomu nedojde, se neztratí —
-   pošlou se nejzadnějšímu kamarádovi. Samotný přesun řeší tah(), aby se
-   posun() nevolal sám přes sebe (zkratka uvnitř vyhodnotPole). */
-const LANO = 6;
-let vLane = false;             // brzda proti zacyklení přenosů po laně
-
-/* Kam nejdál smí hráč dojet, aby se lano nenapnulo. */
-function meznik(h) {
-  const ostatni = hraci.filter(x => x !== h && !x.dokoncil);
-  if (!ostatni.length) return POCET_POLI - 1;
-  return Math.min(POCET_POLI - 1, Math.min(...ostatni.map(x => x.pole)) + LANO);
-}
-
-/* Nejzadnější kamarád, kterého lano přitáhne. Chyceného nevynecháváme —
-   dřív se stávalo, že kraken držel posledního a posádka od truhly neměla
-   koho táhnout, takže mu nikdo nepomohl. Lano ho z chapadel vytáhne. */
-function nejzadnejsi(krome) {
-  return hraci.filter(x => x !== krome && !x.dokoncil)
-              .sort((a, b) => a.pole - b.pole)[0];
-}
-
-/* Posun o n polí vpřed (bez vyhodnocení pole).
-   Vrací počet kroků, na které nedošlo kvůli lanu. */
-async function posun(h, n, rychlost = 170, bezLana = false) {
-  const cap = bezLana ? POCET_POLI - 1 : meznik(h);
-  let k = 0;
-  for (; k < n; k++) {
+/* Posun o n polí vpřed (bez vyhodnocení pole). */
+async function posun(h, n, rychlost = 170) {
+  for (let k = 0; k < n; k++) {
     if (h.pole >= POCET_POLI - 1) break;
-    if (h.pole >= cap) return n - k;          // lano se napjalo
     h.pole++;
     umisti(h);
     oznacAktivniho(h);
@@ -1536,6 +1471,15 @@ async function posun(h, n, rychlost = 170, bezLana = false) {
     await pauza(rychlost);
   }
   return 0;
+}
+
+/* Pirát došel k truhle. */
+async function dokonci(h) {
+  h.dokoncil = true;
+  vykresliPosadku();
+  prehraj('poklad');
+  zablesknTruhlu();
+  await hlaska('🏆 ' + h.jmeno + ' u pokladu!', h);
 }
 
 /* Co se stane na políčku, kde hráč skončil. */
@@ -1579,13 +1523,7 @@ async function vyhodnotPole(h, hloubka = 0) {
     if (cil != null) {
       prehraj('proud');
       await hlaska('🌿 Tajná stezka džunglí!', h, 'zkratka');
-      // Zkratka podléhá lanu jako každý jiný pohyb; co se nevejde,
-      // dostane nejzadnější kamarád. Bez toho by se dal provaz obejít.
-      const zbylo = await posun(h, cil - h.pole, 80);
-      if (zbylo > 0 && !vLane) {
-        const kamarad = nejzadnejsi(h);
-        if (kamarad) { vLane = true; await pritahniLanem(kamarad, zbylo); vLane = false; }
-      }
+      await posun(h, cil - h.pole, 80);
       await vyhodnotPole(h, hloubka + 1);
     }
     return;
@@ -1624,17 +1562,6 @@ async function vybuchEfekt(pole) {
   g.innerHTML = '';
 }
 
-/* Výbuch krakena pustí – tlaková vlna mu vytrhne kořist z chapadel. */
-async function vybuchOsvobodi() {
-  const drzeni = hraci.filter(x => !x.dokoncil && x.chycen);
-  if (!drzeni.length) return;
-  drzeni.forEach(osvobod);
-  postavFigurky();
-  vykresliPosadku();
-  await hlaska('⛓️ Tlaková vlna vytrhla ' +
-               drzeni.map(x => x.koho).join(' a ') + ' z chapadel!', drzeni[0]);
-}
-
 /* Nechá hráče kliknout na mapu, kam chce vystřelit. Vrací vybraný cíl. */
 function vyberCilMysi(cile) {
   return new Promise(hotovo => {
@@ -1669,12 +1596,8 @@ function vyberCilMysi(cile) {
 async function mireniPistoli(kdo) {
   const sudVDosahu = sudy.find(p => kraken.aktivni &&
                                     p - kraken.pole >= 0 && p - kraken.pole <= SUD_DOSAH);
-  const drzeny = hraci.filter(x => x !== kdo && !x.dokoncil && x.chycen)
-                      .sort((a, b) => a.pole - b.pole)[0];
-
   const cile = [];
   if (sudVDosahu != null) cile.push({ co: 'sud', pole: sudVDosahu });
-  if (drzeny)             cile.push({ co: 'osvobodit', pole: drzeny.pole });
   if (kraken.aktivni)     cile.push({ co: 'kraken', pole: kraken.pole });
   if (!cile.length) { await vystrel(kdo); return; }
 
@@ -1686,7 +1609,6 @@ async function mireniPistoli(kdo) {
   }
 
   if (cil.co === 'sud') await odpalSud(kdo, cil.pole);
-  else if (cil.co === 'osvobodit') await vystrel(kdo, { osvobodi: true });
   else await vystrel(kdo);
 }
 
@@ -1745,50 +1667,24 @@ async function odpalSud(kdo, pole) {
   window.__brzdy = window.__brzdy || {};
   window.__brzdy.sudy = (window.__brzdy.sudy || 0) + 1;
   await hlaska('💥 VÝBUCH! Kraken couvl o ' + SUD_ODRAZ, kraken);
-  await vybuchOsvobodi();
 }
 
 
-/* Meč prosekne chapadla. Pirát doběhne ke kamarádovi, sekne, kamaráda
-   to odhodí kus dopředu — a zachránce se vrátí na své pole. Sám sobě
-   pomůže taky, na rozdíl od pistole. Kraken se z toho sbírá celé kolo,
-   aby měli šanci utéct. */
+/* Meč proseká džungli tomu, kdo zaostal nejvíc — houští ustoupí a on
+   popojde o tři pole. Proti pistoli je to úplně jiná práce: pistole mlátí
+   krakena, meč pomáhá kamarádovi. Zbraň na krakena z něj byla dřív, ale
+   dala se použít jen v 6 % tahů a dělala skoro totéž co pistole. */
 async function prosekni(kdo) {
-  const drzeny = kdo.chycen ? kdo
-    : hraci.filter(x => x.chycen && !x.dokoncil).sort((a, b) => a.pole - b.pole)[0];
-
-  // Chapadla mají přednost: koho drží, ten se proseká ven.
-  if (drzeny) {
-    const g = document.getElementById('figurka-' + kdo.pirat.id);
-    g.parentNode.appendChild(g);
-    const doma = BOD[kdo.pole];
-    prehraj('salva');
-    if (drzeny !== kdo) await letKoule(g, doma, BOD[drzeny.pole], 260);  // doběhne
-    zatres();
-    await seknuti(drzeny.pole);
-    await hlaska('⚔️ Meč prosekl chapadla!', drzeny);
-    osvobod(drzeny);
-    await posun(drzeny, MEC_ODSUN, 120, true);                           // sek ho odhodí
-    if (drzeny !== kdo) await letKoule(g, BOD[drzeny.pole], doma, 260);  // a zpátky
-    umisti(kdo);
-    postavFigurky();
-    vykresliPosadku();
-  }
-
-  // A když je kraken na dosah, dostane přes chapadla taky.
-  if (kraken.aktivni && odstupOdKrakena(kdo) >= 0 &&
-      odstupOdKrakena(kdo) <= MEC_DOSAH) {
-    const g = document.getElementById('kraken');
-    prehraj('salva');
-    g.classList.add('zasah');
-    zatres();
-    await seknuti(kraken.pole);
-    if (!drzeny) await hlaska('⚔️ Sek mečem!', kdo);
-    g.classList.remove('zasah');
-    kraken.pole = Math.max(0, kraken.pole - MEC_ODRAZ);
-    umistiKrakena();
-    await hlaska('🐙 Couvl o ' + MEC_ODRAZ + ' pole!', kraken);
-  }
+  const komu = hraci.filter(x => x !== kdo && !x.dokoncil && x.pole < kdo.pole)
+                    .sort((a, b) => a.pole - b.pole)[0];
+  if (!komu) return;
+  prehraj('salva');
+  await seknuti(komu.pole);
+  await hlaska('⚔️ Meč proseká džungli pro ' + komu.koho + '!', kdo);
+  await posun(komu, MEC_PROSEK, 200);
+  await vyhodnotPole(komu);
+  if (komu.pole >= POCET_POLI - 1) await dokonci(komu);
+  postavFigurky();
 }
 
 /* Sudy na ploše: soudek s lebkou, ať je na první pohled jasné, že
@@ -1837,7 +1733,7 @@ function letKoule(el, [ax, ay], [bx, by], doba = 400) {
 /* Výstřel na krakena – koule letí od figurky, kraken zčervená a couvne.
    Salvové pole navíc krakena omráčí, takže vynechá příští tah.
    Pistole z ruky ho jen odstrčí. */
-async function vystrel(kdo, { karta = false, omraci = false, osvobodi = false } = {}) {
+async function vystrel(kdo, { karta = false, omraci = false } = {}) {
   // `karta` = výstřel z červeného salvového pole, ne z pistole v ruce.
   const jeSalva = karta;
   if (karta) {
@@ -1880,19 +1776,6 @@ async function vystrel(kdo, { karta = false, omraci = false, osvobodi = false } 
   if (kraken.pole > 0) { kraken.pole--; umistiKrakena(); }
   if (!omraci) { umistiKrakena(); } else await hlaska('🐙 Zásah! Kraken couvl', kraken);
 
-  // Pistole na dálku vytrhne kamaráda z chapadel – sebe si však nezachrání.
-  if (osvobodi) {
-    const drzeny = hraci.filter(x => x !== kdo && !x.dokoncil && x.chycen)
-                        .sort((a, b) => a.pole - b.pole)[0];
-    if (drzeny) {
-      osvobod(drzeny);
-      postavFigurky();
-      vykresliPosadku();
-      await hlaska('💥 Kulka utrhla chapadlo — ' + drzeny.jmeno +
-                   rod(drzeny, ' je volný!', ' je volná!'), drzeny);
-    }
-  }
-
   if (omraci) {
     window.__brzdy.omraceni++;
     kraken.zastaven = true;
@@ -1900,38 +1783,39 @@ async function vystrel(kdo, { karta = false, omraci = false, osvobodi = false } 
   }
 }
 
-/* Fialové pole u laguny: vystřelí chapadlo přes půl plochy, omotá se
-   pirátovi kolem nohou a **stáhne ho až ke krakenovi**, kde ho drží.
-   Síla se škáluje sama: kdo je daleko vpředu, spadne hlouběji — a protože
-   posádku drží lano, zabrzdí to celou partu. Chycení už není trest,
-   protože ven pomůže lano, meč i pistole. */
+/* Fialové pole u laguny: z vody šlehne chapadlo. Nikoho nestrhává ani
+   nedrží — jen krakena rozzuří, takže si příští kolo přidá k hodu.
+   Pirát zůstane stát tam, kam došel: trest dopadne na celou posádku
+   najednou, ne na to dítě, které mělo smůlu na políčko. */
 async function chapadlo(kdo) {
   prehraj('kraken');
   zatres();
-
-  if (!kraken.aktivni) {
-    // Kraken ještě nevyplul, tak jen škubne dozadu.
-    kdo.pole = Math.max(0, kdo.pole - CHAPADLO_ZPET);
-    umisti(kdo);
-    postavFigurky();
-    await hlaska('🐙 CHAPADLO strhlo ' + kdo.koho + ' zpátky!', kdo, 'chapadlo');
-    return;
-  }
-
-  const odkud = kdo.pole;
-  // Chapadlo si přitáhne obojí k sobě: krakena dopředu, piráta k němu.
-  // Samotné stahování piráta hru jen prodlužovalo – krakenovi nepomohlo.
-  kraken.pole = Math.min(POCET_POLI - 1, kraken.pole + CHAPADLO_VPRED);
-  umistiKrakena();
-  kdo.pole = Math.max(0, Math.min(kdo.pole, kraken.pole));
-  kdo.chycen = true;
-  umisti(kdo);
-  postavFigurky();
-  vykresliPosadku();
+  if (kraken.aktivni) kraken.bonus += CHAPADLO_BONUS;
+  await sehChapadla(kdo.pole);
   zatres();
-  await hlaska(odkud - kdo.pole >= 3
-    ? '🐙 CHAPADLO stáhlo ' + kdo.koho + ' o ' + (odkud - kdo.pole) + ' polí ke krakenovi!'
-    : '🐙 CHAPADLO popadlo ' + kdo.koho + '!', kdo, 'chapadlo');
+  // `koho` je 4. pád (Artíka, Theušku) – sloveso pro hlášku musí ten pád
+  // unést, „šlehlo po Artíka" by byl paskvil.
+  await hlaska('🐙 CHAPADLO! Vylekalo ' + kdo.koho + ' a kraken se rozzuřil'
+               + (kraken.aktivni ? ' — příště hodí o ' + CHAPADLO_BONUS + ' víc' : ''),
+               kdo, 'chapadlo');
+}
+
+/* Chapadlo musí být vidět, i když už nikým nehýbe: přes pole šlehne
+   fialový úponek a zase zmizí. */
+async function sehChapadla(pole) {
+  const g = document.getElementById('efekty');
+  g.parentNode.appendChild(g);
+  const [x, y] = BOD[pole];
+  g.innerHTML = `<g class="sek" transform="translate(${x.toFixed(0)},${y.toFixed(0)})">
+    <path d="M -130 160 C -70 70 -30 30 10 -60" stroke="#4A3A63" stroke-width="30"
+          stroke-linecap="round" fill="none"/>
+    <path d="M -130 160 C -70 70 -30 30 10 -60" stroke="#8A6FB0" stroke-width="18"
+          stroke-linecap="round" fill="none"/>
+    <path d="M -110 150 C -60 75 -25 35 4 -48" stroke="#B9A3D8" stroke-width="5"
+          stroke-linecap="round" fill="none" opacity="0.8"/>
+  </g>`;
+  await pauza(420);
+  g.innerHTML = '';
 }
 
 async function tah(hod) {
@@ -1944,32 +1828,11 @@ async function tah(hod) {
   const h = hraci[naTahu];
   let hrac = h;
 
-  // Koho drží kraken, ten se místo pohybu pokouší vykroutit.
-  if (h.chycen) {
-    odehranychTahu++;
-    if (hod >= VYKROUCENI_OD) {
-      osvobod(h);
-      prehraj('zachrana');
-      await hlaska(`💪 ${rod(h, 'Vykroutil', 'Vykroutila')} ses z chapadel!`, h);
-    } else {
-      await hlaska('🐙 ' + h.jmeno + ' je pořád v chapadlech', h);
-    }
-    bezi = false;
-    if (!await koloDohrano()) dalsiHrac();
-    return;
-  }
-
-  // Kdo je u truhly, nikam nejde – opře se do lana a táhne kamaráda k sobě.
+  // Kdo je u truhly, stane se dělostřelcem a pálí každý tah – čekání
+  // na pětku nebo šestku znamenalo, že se dvě třetiny tahů nedělo nic.
   if (h.dokoncil) {
     odehranychTahu++;
-    const kdo = POKLAD_TAHNE ? nejzadnejsi(h) : null;
-    if (kdo) {
-      await pritahniLanem(kdo, hod);
-    } else if (hod >= 5) {
-      await vystrel(h);
-    } else {
-      await hlaska('💣 ' + h.jmeno + ' nabíjí kanón…', h);
-    }
+    await vystrel(h);
     bezi = false;
     if (!await koloDohrano()) dalsiHrac();
     return;
@@ -1981,17 +1844,8 @@ async function tah(hod) {
   hrac.posun = 0;
   vykresliRuku();
 
-  const zbytekLana = await posun(hrac, hod);
+  await posun(hrac, hod);
   await vyhodnotPole(hrac);
-
-  // Lano se napjalo – zbylé kroky dostane nejzadnější kamarád.
-  if (zbytekLana > 0) {
-    const kdo = nejzadnejsi(hrac);
-    if (kdo) {
-      // Bez bubliny: napnuté lano a rozjetý kamarád mluví za sebe.
-      await pritahniLanem(kdo, zbytekLana);
-    }
-  }
 
   // Do cíle se dá dojet i bonusem z pole, proto se ptáme až tady.
   if (hrac.pole >= POCET_POLI - 1) {
@@ -2032,8 +1886,14 @@ async function koloDohrano() {
     '<span class="kdo" style="background:#4A3A63">🐙 Kraken</span>&nbsp;si hází…';
   await pauza(300);
   let hod = zakladKrakena() + 1 + Math.floor(Math.random() * stenKrakena());
-  if (kraken.bonus) { hod += kraken.bonus; kraken.bonus = 0; }
-  await hlaska('🐙 Kraken hodil ' + hod, kraken, 'krakenHod');
+  // Plus od chapadla musí být vidět, jinak kraken skočí bez vysvětlení.
+  let odkudPlus = '';
+  if (kraken.bonus) {
+    odkudPlus = ' (+' + kraken.bonus + ' za chapadlo)';
+    hod += kraken.bonus; kraken.bonus = 0;
+  }
+  await hlaska('🐙 Kraken hodil ' + hod + odkudPlus, kraken,
+               odkudPlus ? null : 'krakenHod');
   if (await krakenPopluje(hod)) return true;
 
   if (kraken.hodNavic) {                    // druhé chapadlo mu dalo hod navíc
